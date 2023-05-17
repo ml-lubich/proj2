@@ -320,7 +320,7 @@ func (userdata *User) is_file_in_user_filespace(filename string) bool {
 		return true
 	}
 	if invite_uuid, ok := userdata.invites_map[filename]; ok {
-
+		return true
 	}
 	return false
 }
@@ -330,6 +330,14 @@ func (userdata *User) is_owner(filename string) bool {
 	// all files that are owned by the user are stored in the files list
 	// all files that the user has in their file space is store either in the files list or the invites list
 	if _, ok := userdata.files[filename]; ok {
+		return true
+	}
+	return false
+}
+
+func (userdata *User) is_invited(filename string) bool {
+	// check if the file is in the invites list
+	if _, ok := userdata.invites_map[filename]; ok {
 		return true
 	}
 	return false
@@ -427,21 +435,48 @@ func is_hmac_match(ciphertext []byte,
 func (userdata *User) get_file(filename string) (file_obj *File, err error) {
 	// must be owner of the file to get the file struct
 	// since only owner has access to the file struct
-
+	// check if the filename is in the userdata files map
 	// the user must be the owner of the file
-	if !userdata.is_owner(filename) {
-		return nil, errors.New("User is not the owner of the file and cannot get the file struct")
-	}
+	// return nil, errors.New("User is not the owner of the file and cannot get the file struct")
+	// return nil, errors.New("User is not invited to the file and cannot get the file struct")
+	// } else if !userdata.is_file_in_user_filespace(filename) { // if the file is not in the user's filespace, then we cannot get the file
 
-	// if the file is not in the user's filespace, then we cannot get the file
-	if !userdata.is_file_in_user_filespace(filename) {
-		return nil, errors.New("This file does not exist, or the user is not the owner of the file, or the user has not been invited to the file")
-	}
+	// the user is neither the owner nor invited to the file
+	// }
 
 	// get the file from the datastore
-	file_bytes, err := get_from_datastore(userdata.files[filename], userdata.hmac_key, userdata.symm_key)
+	// file_bytes, err := get_from_datastore(userdata.files[filename], userdata.hmac_key, userdata.symm_key)
 
-	return file_obj, nil
+	// return file_obj, nil
+
+	if userdata.is_owner(filename) { // the user is owner
+		
+		file_location := userdata.files[filename]
+		file_obj, err = get_from_datastore(file_location, userdata.hmac_key, userdata.symm_key)
+		if err != nil {
+			return errros.New("Error while getting file from datastore")
+		}
+		return file_obj, nil
+
+	} else if userdata.is_invited(filename) { // the user is invited to the file
+		invite_location := userdata.invites_map[filename]
+		// getting the file location from the invite
+		invite_obj, err := get_from_datastore(invite_location, userdata.hmac_key, userdata.symm_key)
+		if err != nil {
+			return errors.New("Error while getting invite from datastore - with editor")
+		}
+		// getting the file location from the invite
+		invite := invite_obj.(Invite)
+		file_location := invite.File_location
+		//getting the file from the file location
+		file_obj, err = get_from_datastore(file_location, userdata.hmac_key, userdata.symm_key)
+		if err != nil {
+			return errors.New("Error while getting file from datastore - with editor")
+		}
+		return file_obj, nil
+	}
+
+	return nil, errors.New("This file does not exist, or the user is not the owner of the file, or the user has not been invited to the file")
 }
 
 // TODO
