@@ -27,8 +27,6 @@ import (
 	_ "strconv"
 )
 
-var forbidden_pws = []string{"123456", "123456789", "qwerty", "password", "12345", "qwerty123", "1q2w3e", "12345678", "111111", "1234567890"}
-
 // This serves two purposes: it shows you a few useful primitives,
 // and suppresses warnings for imports not being used. It can be
 // safely deleted!
@@ -73,7 +71,10 @@ func someUsefulThings() {
 	// The "_" indicates that we don't check for the error case here.
 	var pk userlib.PKEEncKey
 	var sk userlib.PKEDecKey
-	pk, sk, _ = userlib.PKEKeyGen()
+	pk, sk, err = userlib.PKEKeyGen()
+	if err != nil {
+		panic(err)
+	}
 	userlib.DebugMsg("PKE Key Pair: (%v, %v)", pk, sk)
 
 	// Here's an example of how to use HBKDF to generate a new key from an input key.
@@ -103,34 +104,100 @@ func someUsefulThings() {
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
-// ----- INVITE CLASS ----- $
-type Invite struct {
-	File                 string
-	Owner                string
-	Signed               []byte
-	Cypher_data_location []byte //uuid.UUID
-	Signature_verify     []byte
+// ----- TREE CLASS -----
+type Node struct {
+	id       string
+	children []*Node
 }
+
+type Tree struct {
+	root *Node
+}
+
+func (n *Node) GetDescendants() []*Node {
+	descendants := []*Node{}
+	n.collectDescendants(&descendants)
+	return descendants
+}
+
+func (n *Node) collectDescendants(descendants *[]*Node) {
+	for _, child := range n.children {
+		*descendants = append(*descendants, child)
+		child.collectDescendants(descendants)
+	}
+}
+
+func (t *Tree) Insert(id string, data string, parent *Node) {
+	node := &Node{id: id, data: data}
+	if parent == nil {
+		t.root = node
+	} else {
+		parent.children = append(parent.children, node)
+	}
+}
+
+func (t *Tree) RemoveNode(id string) {
+	t.root = t.removeNode(t.root, id)
+}
+
+func (t *Tree) removeNode(node *Node, id string) *Node {
+	if node == nil {
+		return nil
+	}
+
+	if node.id == id {
+		return nil
+	}
+
+	resultChildren := []*Node{}
+	for _, child := range node.children {
+		newChild := t.removeNode(child, id)
+		if newChild != nil {
+			resultChildren = append(resultChildren, newChild)
+		}
+	}
+
+	node.children = resultChildren
+	return node
+}
+
+// ----- INVITE CLASS ----- $
+type Invite struct { // points to sentinel
+	File            string
+	Owner           string
+	Signed          []byte
+	File_uuid       []byte // uuid.UUID
+	File_sym_key    []byte // confidentiality: unlocks the file (needed for revocation when we rehash the file)
+	File_hmac_key   []byte // integrity: hmac as well (needed for revocation when we rehash the file)
+	Editor_uuid     []byte // editor class that stores the usernames of users that are authorized to edit the file in a tree structure (hierarchical structure)
+	Editor_sym_key  []byte // confidentiality: (needed for revocation when we rehash the file)
+	Editor_hmac_key []byte // integrity: hmac as well (needed for revocation when we rehash the file)
+}
+
+// ----- EDITOR CLASS -----
+type Editors struct {
+	editors_tree Node
+} // TODO finish implementation for editor class
 
 // ----- FILE CLASSES -----
 // contains the data of the file in chyptertxt and hmac
 type File_container struct {
-	Chypter_text []byte
-	Hmac         []byte
+	Cypher_text []byte
+	Hmac        []byte
 }
 
 type File struct {
-	Uuid    uuid.UUID // this is going to change when invite is revoked
-	file_ll uuid.UUID
-	Owner   string
-	Editors map[string]uuid.UUID // not sure about this
-	Hmac    []byte
-	Key     []byte
-	Iv      []byte
+	Sentinel_uuid uuid.UUID // this is going to change when invite is revoked
+	Owner         string
+	Editors       map[string]uuid.UUID // not sure about this
+	Hmac          []byte
+	Key           []byte
+	Iv            []byte
+	Editors_uuid  uuid.UUID // this is going to change when invite is revoked
 }
 
 type File_sentinel struct {
-	Next uuid.UUID
+	Head uuid.UUID
 	End  uuid.UUID
 }
 
@@ -139,22 +206,9 @@ type File_node struct {
 	Data []byte
 }
 
-// type File_linked_list struct {
-// 	Sentinel *File_node
-// 	Size     int
-// }
-
-// func init_file_fll() *File_linked_list { // return type ??
-// 	sent := &File_node{Data: []byte("sentinel"), Next: uuid.Nil}
-// 	return &File_linked_list{Sentinel: sent, Size: 0}
-// }
-
 // ----- USER CLASS -----
-// This is the type definition for the User struct.
-// A Go struct is like a Python or Java class - it can have attributes
-// (e.g. like the Username attribute) and methods (e.g. like the StoreFile method below).
 type User struct {
-	uuid             uuid.UUID
+	uuid             uuid.UUID // own uuid
 	Username         string
 	private_key      userlib.PKEDecKey      // userlib.PrivateKeyType // needs to be stored in the keystore ????
 	public_key       userlib.PKEEncKey      // userlib.PublicKeyType
@@ -163,27 +217,9 @@ type User struct {
 	files            map[string]uuid.UUID
 	invites_map      map[string]uuid.UUID // invites received
 	master_key       []byte               // to check if you're the owner of the file & remove persmission
-
-	// You can add other attributes here if you want! But note that in order for attributes to
-	// be included when this struct is serialized to/from JSON, they must be capitalized.
-	// On the flipside, if you have an attribute that you want to be able to access from
-	// this struct's methods, but you DON'T want that value to be included in the serialized value
-	// of this struct that's stored in datastore, then you can use a "private" variable (e.g. one that
-	// begins with a lowercase letter).
 }
-
-// Generates a new UUID - it computes a 64-bit hash value
-func GenerateUUID(username string, password string) uuid.UUID {
-	// Hash the username and password using FNV-1a
-	hash := userlib.Argon2Key([]byte(password), []byte(username), 16)
-	storageKey := uuid.NewSHA1(uuid.Nil, hash)
-	return storageKey
-}
-
-// NOTE: The following methods have toy (insecure!) implementations.
 
 func InitUser(username string, password string) (userdataptr *User, err error) {
-
 	// Check if the username or psw are empty
 	if username == "" || password == "" {
 		return nil, errors.New("empty username or password")
@@ -192,15 +228,8 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	// Check if a user with the same username already exists
 	_, exists := userlib.KeystoreGet(username + "public-key")
 	if exists {
-		return nil, errors.New("username already taken")
+		return nil, errors.New("User already exists with the provided username")
 	}
-
-	// // Check that the psw choice is not common
-	// for _, p := range forbidden_pws {
-	// 	if p == password {
-	// 		return nil, errors.New("you are not allowed to use common passwords")
-	// 	}
-	// }
 
 	// creating Public & Private keys
 	var pk userlib.PKEEncKey // HashKDF
@@ -241,7 +270,7 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 	// storing to datastore
 	marshalled_bytes, err := json.Marshal(client)
 	if err != nil {
-		return nil, errors.New("error while marshalling user")
+		return nil, errors.New("Error while marshalling user")
 	}
 	// encrypt bytes
 
@@ -263,7 +292,10 @@ func InitUser(username string, password string) (userdataptr *User, err error) {
 func GetUser(username string, password string) (userdataptr *User, err error) {
 
 	// retrieving chypertext of user
-	cypher_text, _ := userlib.DatastoreGet(GenerateUUID(username, password))
+	cypher_text, ok := userlib.DatastoreGet(GenerateUUID(username, password))
+	if !ok {
+		return nil, errors.New("User not found or invalid credentials")
+	}
 
 	// regenerating the key to get the user
 	enc_key := userlib.Argon2Key([]byte(password), userlib.Hash([]byte(username)), 16)
@@ -273,40 +305,60 @@ func GetUser(username string, password string) (userdataptr *User, err error) {
 
 	// unmarshalling the user to retrieve the object
 	var userdata User
-	json.Unmarshal(marshal_user, userdata)
+	err = json.Unmarshal(marshal_user, &userdata)
+	if err != nil {
+		return nil, errors.New("Error while unmarshalling user")
+	}
 	return &userdata, nil
-	return nil, errors.New("user not found or invalid credentials")
 }
 
 // HELPER FUNCTIONS
-func (userdata *User) owns(filename string) bool {
+// TODO
+func (userdata *User) is_file_in_user_filespace(filename string) bool {
+	// check if user has access to file by checking either in the files list or the invites list
+	if _, ok := userdata.files[filename]; ok {
+		return true
+	}
+	if invite_uuid, ok := userdata.invites_map[filename]; ok {
+
+	}
+	return false
+}
+
+func (userdata *User) is_owner(filename string) bool {
 	// go through the map of files and check if the filename is there
+	// all files that are owned by the user are stored in the files list
+	// all files that the user has in their file space is store either in the files list or the invites list
 	if _, ok := userdata.files[filename]; ok {
 		return true
 	}
 	return false
 }
 
-// when calling this method, always marshal first the data
 func save_to_datastore(uuid uuid.UUID,
-	data []byte,
+	obj interface{},
 	hmac_key []byte,
 	symm_key []byte,
 	iv []byte) (err error) {
 
-	var container File_container
-	container.Chypter_text = userlib.SymEnc(symm_key, iv, data)
+	obj_bytes, err := json.Marshal(obj)
+	if err != nil {
+		return errors.New("Error when marshalling")
+	}
 
-	hmac, err_hmac := userlib.HMACEval(hmac_key, container.Chypter_text)
+	var container File_container
+	container.Cypher_text = userlib.SymEnc(symm_key, iv, obj_bytes)
+
+	hmac, err_hmac := userlib.HMACEval(hmac_key, container.Cypher_text)
 	if err_hmac != nil {
-		return err_hmac
+		return errors.New("error while computing HMAC")
 	}
 
 	container.Hmac = hmac
 
 	marshalled_container, err_mar := json.Marshal(container)
 	if err_mar != nil {
-		return err_mar
+		return errors.New("error while marshalling")
 	}
 
 	userlib.DatastoreSet(uuid, marshalled_container)
@@ -315,30 +367,48 @@ func save_to_datastore(uuid uuid.UUID,
 
 func get_from_datastore(uuid uuid.UUID,
 	hmac []byte,
-	symm_key []byte) (data []byte, err error) {
+	symm_key []byte) (obj interface{}, err error) {
 
 	bytes, empty := userlib.DatastoreGet(uuid)
 	if !empty {
-		return nil, errors.New("Empty UUID")
+		// print the UUID
+		fmt.Println("UUID:", uuid.String())
+		return nil, errors.New("No entry found with UUID in Datastore.")
 	}
 
 	// unmarshalling the content
 	var container File_container
-	err_unmar := json.Unmarshal(bytes, &container)
-	if err_unmar != nil {
+	err = json.Unmarshal(bytes, &container)
+	if err != nil {
 		return nil, errors.New("Error when unmarshalling")
 	}
 
 	//cheking the HMACs are the same
-	is_same, err_hmac := hmac_checker(container.Chypter_text, container.Hmac, hmac)
-	if !is_same {
+	is_same, err_hmac := is_hmac_match(container.Cypher_text, container.Hmac, hmac)
+	if err_hmac != nil {
 		return nil, err_hmac
 	}
+	if !is_same {
+		// print hmacs line by line
+		fmt.Println("HMACs are different\n===\nContainer")
+		fmt.Println(container.Hmac)
+		fmt.Println("===\nHMAC")
+		fmt.Println(hmac)
+		return nil, errors.New("HMACs do not match")
+	}
 
-	return userlib.SymDec(symm_key, container.Chypter_text), nil
+	data_bytes := userlib.SymDec(symm_key, container.Cypher_text)
+
+	// unmarshalling the data
+	err = json.Unmarshal(data_bytes, &obj)
+	if err != nil {
+		return nil, errors.New("Error when unmarshalling")
+	}
+
+	return obj, nil
 }
 
-func hmac_checker(ciphertext []byte,
+func is_hmac_match(ciphertext []byte,
 	hmac []byte,
 	key []byte) (equal bool, err error) {
 
@@ -354,114 +424,182 @@ func hmac_checker(ciphertext []byte,
 	return true, nil
 }
 
-func get_file(master_key []byte, filename string) (file_obj *File, file_s *File_sentinel, err error) {
+func (userdata *User) get_file(filename string) (file_obj *File, err error) {
+	// must be owner of the file to get the file struct
+	// since only owner has access to the file struct
 
-	// regenerating & getting keys
-	key, key_err := userlib.HashKDF(master_key, []byte(filename))
+	// the user must be the owner of the file
+	if !userdata.is_owner(filename) {
+		return nil, errors.New("User is not the owner of the file and cannot get the file struct")
+	}
+
+	// if the file is not in the user's filespace, then we cannot get the file
+	if !userdata.is_file_in_user_filespace(filename) {
+		return nil, errors.New("This file does not exist, or the user is not the owner of the file, or the user has not been invited to the file")
+	}
+
+	// get the file from the datastore
+	file_bytes, err := get_from_datastore(userdata.files[filename], userdata.hmac_key, userdata.symm_key)
+
+	return file_obj, nil
+}
+
+// TODO
+func (userdata *User) get_sentinel(filename string) (file_sentinel File_sentinel, err error) {
+	// can be owner or user shared to the file, but the paths are different
+
+	if userdata.is_owner(filename) {
+		// get the file from the datastore
+		file_location := userdata.files[filename]
+		file_bytes, err := get_from_datastore(file_location, userdata.hmac_key, userdata.symm_key)
+		if err != nil {
+			return nil, errors.New("Error when getting file from datastore")
+		}
+		return file_bytes.(*File), nil
+
+	} else {
+
+		// get keys
+		file_uuid, hmac_key, symm_key := userdata.get_file_keys()
+
+		// if not owner, then must get sentinel from the invites
+		invite_uuid, err_invite := uuid.FromBytes(file_uuid)
+		if err_invite != nil {
+			return nil, nil, errors.New("Cannot convert bytes to invite UUID")
+		}
+
+		invite_bytes, err := get_from_datastore(invite_uuid, hmac_key, symm_key)
+		if err != nil {
+			return nil, err
+		}
+
+		file, ok := invite_bytes.(Invite)
+		if !ok {
+			return nil, nil, errors.New("Cannot convert invite bytes to Invite")
+		}
+
+		sentinel_bytes, err := get_from_datastore(file.Head, file.Hmac, file.Key)
+		if err != nil {
+			return nil, nil, err
+		}
+		sentinel, ok := sentinel_bytes.(File_sentinel)
+		if !ok {
+			return nil, nil, errors.New("Cannot convert sentinel bytes to File_sentinel")
+		}
+
+		err_unmar_sentinel := json.Unmarshal(sentinel_bytes, &sentinel)
+		if err_unmar_sentinel != nil {
+			return nil, nil, errors.New("Error while unmarshalling sentinel")
+		}
+	}
+
+	return sentinel, nil
+}
+
+func (userdata *User) get_file_keys(uuid byte[], hmac_key byte[], symm_key byte[]) {
+	// regenerating keys
+	key, key_err := userlib.HashKDF(userdata.master_key, []byte(filename))
 	if key_err != nil {
-		return nil, nil, key_err
+		return nil, key_err
 	}
 
-	_uuid, hmac_key, symm_key := key[:16], key[16:32], key[48:64]
-	invite_uuid, err_invite := uuid.FromBytes(_uuid)
-	if err_invite != nil {
-		return nil, nil, err_invite
-	}
-
-	var file File // 1st return
-	file_bytes, _ := get_from_datastore(invite_uuid, hmac_key, symm_key)
-	err_unmar := json.Unmarshal(file_bytes, &file) // error here
-	if err_unmar != nil {
-		return nil, nil, err_unmar
-	}
-
-	var sentinel File_sentinel // 2nd return
-	sentinel_bytes, _ := get_from_datastore(file.Uuid, file.Hmac, file.Key)
-	err_unmar2 := json.Unmarshal(sentinel_bytes, &sentinel)
-	if err_unmar2 != nil {
-		return nil, nil, err_unmar2
-	}
-
-	return &file, &sentinel, nil
+	uuid, hmac_key, symm_key := key[:16], key[16:32], key[48:64]
+	return uuid, hmac_key, symm_key
 }
 
 // TODO
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
+	if !userdata.is_file_in_user_filespace(filename) {
+		file := File{
+			Sentinel_uuid: uuid.New(),
+			Owner:         userdata.Username,
+			Editors:       make(map[string]uuid.UUID),
+			Hmac:          userlib.RandomBytes(16),
+			Key:           userlib.RandomBytes(16), // need to first generate this key by the owner
+			Iv:            userlib.RandomBytes(16),
+			Editors_uuid:  uuid.New(),
+			Editors_hmac:  userlib.RandomBytes(16),
+			Editors_key:   userlib.RandomBytes(16),
+			Editors_iv:    userlib.RandomBytes(16),
+		}
 
-	if !userdata.owns(filename) {
+		// Generating & Saving file to datastore and relating that file to user
+		file_obj_bytes, err := json.Marshal(file)
+		if err != nil {
+			return errors.New("Error when marshalling")
+		}
 
-		file_obj := File{
-			Uuid:    uuid.New(),
-			file_ll: uuid.Nil,
-			Owner:   userdata.Username,
-			Editors: make(map[string]uuid.UUID),
-			Hmac:    userlib.RandomBytes(16),
-			Key:     userlib.RandomBytes(16), // need to first generate this key by the owner
-			Iv:      userlib.RandomBytes(16)}
-
-		// Creating & Saving "head" to datastore
-		file_head := File_sentinel{Next: uuid.New(), End: uuid.Nil}
-		file_head_bytes, _ := json.Marshal(file_head)
-		err_save := save_to_datastore(file_obj.Uuid, file_head_bytes, file_obj.Hmac, file_obj.Key, file_obj.Iv)
+		file_meta_uuid := uuid.New()
+		userdata.files[filename] = file_meta_uuid // adding file metadata (file struct) to user's files
+		err_save := save_to_datastore(file_meta_uuid, file_obj_bytes, file.Hmac, file.Key, file.Iv)
 		if err_save != nil {
 			return err_save
 		}
 
-		// Creating & Saving "File Node" to datastore
-		file_n := File_node{Data: content, Next: uuid.New()}
-		file_n_bytes, _ := json.Marshal(file_n)
-		err_save_node := save_to_datastore(file_obj.Uuid, file_n_bytes, file_obj.Hmac, file_obj.Key, file_obj.Iv)
+		// Creating & Saving sentinel to datastore
+		file_sentinel := File_sentinel{Head: uuid.New()}
+		file_sentinel_bytes, err := json.Marshal(file_sentinel)
+		if err != nil {
+			return errors.New("Error when marshalling")
+		}
+		err_save = save_to_datastore(file.Sentinel_uuid, file_sentinel_bytes, file.Hmac, file.Key, file.Iv)
+		if err_save != nil {
+			return err_save
+		}
+
+		// Creating & Saving "File Node" to datastore, adding to sentinel head
+		current_node := File_node{Data: content, Next: uuid.Nil}
+		file_n_bytes, err := json.Marshal(current_node)
+		if err != nil {
+			return errors.New("Error when marshalling")
+		}
+		err_save_node := save_to_datastore(file_sentinel.Head, file_n_bytes, file.Hmac, file.Key, file.Iv)
 		if err_save_node != nil {
 			return err_save_node
 		}
 
-		// Creating & Saving "End Node" to datastore
-		file_end := File_node{Data: []byte{}, Next: uuid.Nil}
-		file_end_bytes, _ := json.Marshal(file_end)
-		err_save_end := save_to_datastore(file_obj.Uuid, file_end_bytes, file_obj.Hmac, file_obj.Key, file_obj.Iv)
-		if err_save_end != nil {
-			return err_save_end
-		}
-		userdata.files[filename] = file_obj.Uuid
+		// Update end of sentinel to point to the starting node
+		file_sentinel.End = current_node.Next
+
+		// Finally, creating Editors (only when the file did not exist before) for sharing with the owner as the root
+		root_node := Node{id: userdata.Username, children: nil}
+		editors := Editors{editors_tree: root_node}
+		save_to_datastore(file.Editors_uuid, editors, file.Editors_hmac, file.Editors_key, file.Editors_iv)
+
+		
+
 		return nil
-		// User Map Invite ???
-		// What about invitation here?
 	}
 
-	file, sentinel, _ := get_file(userdata.master_key, filename)
+	// if file exists, overwrite the file
+	file_meta, err := userdata.get_file(filename)
+	if err != nil {
+		return err
+	}
+	sentinel, err := userdata.get_sentinel(filename)
+	if err != nil {
+		return err
+	}
 
-	// creating "node" & converting it into []bytes
-	node := File_node{Next: uuid.New(), Data: content}
+	node := File_node{Next: sentinel.Head, Data: content}
 	node_bytes, err_mar := json.Marshal(node)
 	if err_mar != nil {
 		return err_mar
 	}
-	// saving "node" []bytes to datastore
-	node_err := save_to_datastore(sentinel.Next, node_bytes, file.Hmac, file.Key, file.Iv)
+
+	node_err := save_to_datastore(sentinel.Head, node_bytes, file_meta.Hmac, file_meta.Key, file_meta.Iv)
 	if node_err != nil {
 		return node_err
 	}
 
-	// creating "end node" & converting it into []bytes
-	end_node := File_node{Next: uuid.Nil, Data: []byte{}}
-	end_node_bytes, err_end_node := json.Marshal(end_node)
-	if err_end_node != nil {
-		return err_end_node
-	}
-	// saving "end node" []bytes to datastore
-	end_err_saving := save_to_datastore(file.Uuid, end_node_bytes, file.Hmac, file.Key, file.Iv)
-	if end_err_saving != nil {
-		return end_err_saving
-	}
+	// update and save sentinel
 
-	// updating "sentinel"
-	sentinel.End = node.Next
-	sentinel_bytes, err_sentinel := json.Marshal(sentinel)
-	if err_sentinel != nil {
-		return err_sentinel
+	sentinel.End = sentinel.Head
+	sentinel_bytes, err_mar := json.Marshal(sentinel)
+	if err_mar != nil {
+		return err_mar
 	}
-	// saving updated "sentinel" to datastore
-	err_saving_sentinel := save_to_datastore(file.Uuid, sentinel_bytes, file.Hmac, file.Key, file.Iv)
+	err_saving_sentinel := save_to_datastore(file_meta.Sentinel_uuid, sentinel_bytes, file_meta.Hmac, file_meta.Key, file_meta.Iv)
 	if err_saving_sentinel != nil {
 		return err_saving_sentinel
 	}
@@ -470,8 +608,7 @@ func (userdata *User) StoreFile(filename string, content []byte) (err error) {
 }
 
 func (userdata *User) AppendToFile(filename string, content []byte) error {
-
-	file, sentinel, err_get_file := get_file(userdata.master_key, filename)
+	file, sentinel, err_get_file := get_sentinel(userdata.master_key, filename)
 	if err_get_file != nil {
 		return err_get_file
 	}
@@ -504,17 +641,16 @@ func (userdata *User) AppendToFile(filename string, content []byte) error {
 }
 
 func (userdata *User) LoadFile(filename string) (content []byte, err error) {
-
 	var file_bytes []byte
 	// file = fileAccess & headOFfile = sentinel
-	file, sentinel, err_get_file := get_file(userdata.master_key, filename)
+	file, sentinel, err_get_file := get_sentinel(userdata.master_key, filename)
 	if err_get_file != nil {
 		return nil, err_get_file
 	}
 
 	// getting "current node" from data store & unmarshalling it
 	var curr_node File_node
-	curr_node_bytes, err_curr_node_bytes := get_from_datastore(sentinel.Next, file.Hmac, file.Key)
+	curr_node_bytes, err_curr_node_bytes := get_from_datastore(sentinel.Head, file.Hmac, file.Key)
 	if err_curr_node_bytes != nil {
 		return nil, err_curr_node_bytes
 	}
@@ -540,27 +676,15 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 		file_bytes = append(file_bytes, curr_node.Data...)
 	}
 
-	// OLD CODE BASE
-	// storageKey, err := uuid.FromBytes(userlib.Hash([]byte(filename + userdata.Username))[:16])
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// dataJSON, ok := userlib.DatastoreGet(storageKey)
-	// if !ok {
-	// 	return nil, errors.New(strings.ToTitle("file not found"))
-	// }
-	// err = json.Unmarshal(dataJSON, &content)
-	// return content, err
-
 	return file_bytes, nil
 }
 
-// TODO
+// TODO among other things, encrypt the invitation with the recipient's public key
 func (userdata *User) CreateInvitation(filename string, recipientUsername string) (invitationPtr uuid.UUID, err error) {
 	// hash_editor = recipientUsername
 	// hash_editor := hex.EncodeToString(userlib.Hash([]byte(recipientUsername)))
 
-	file, sentinel, err_get_file := get_file(userdata.master_key, filename)
+	file, sentinel, err_get_file := get_sentinel(userdata.master_key, filename)
 	if err_get_file != nil {
 		return uuid.Nil, err_get_file
 	}
@@ -612,7 +736,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 			return uuid.Nil, err_marshalling_file
 		}
 
-		err_saving_file := save_to_datastore(sentinel.Next, file_bytes, file.Hmac, file.Key, file.Iv)
+		err_saving_file := save_to_datastore(sentinel.Head, file_bytes, file.Hmac, file.Key, file.Iv)
 		if err_saving_file != nil {
 			return uuid.Nil, err_saving_file
 		}
@@ -657,7 +781,7 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 			return uuid.Nil, err_marshalling_file
 		}
 
-		return userdata.invites_map[filename], save_to_datastore(sentinel.Next, file_bytes, file.Hmac, file.Key, file.Iv)
+		return userdata.invites_map[filename], save_to_datastore(sentinel.Head, file_bytes, file.Hmac, file.Key, file.Iv)
 	}
 	// the user does not have access to the file nor is the owner
 	return uuid.Nil, errors.New("User does not have access to file nor is the owner")
@@ -677,55 +801,52 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 	if !ok {
 		return errors.New("check invitation is no longer valid due to revocation")
 	}
-	// (1) Verify that invitation comes from the owner
-	// (1.1) Getting the public key of the sender
+
+	// Does senderUsername exist? Checking this via getting the public key of the sender
 	public_key, pk_exist := userlib.KeystoreGet(senderUsername + "public-key")
 	if !pk_exist {
-		return nil
+		return errors.New("Cannot get the public key of senderUsername")
 	}
-	// (1.2) Getting the signature from the sender
+
+	// Getting the signature from the sender
 	signature, sign_exist := userlib.KeystoreGet(senderUsername + "key-verify")
 	if !sign_exist {
-		return nil
+		return errors.New("Cannot get the digitial signature of the sender")
 	}
 
 	// (1.3) Getting the cyphertext from invitationPtr
-	cypher_text, err := userlib.DatastoreGet(invitationPtr)
-	if !err {
-		return nil
+	cypher_text, ok := userlib.DatastoreGet(invitationPtr)
+	if !ok {
+		return errors.New("Cannot get invitation from Datastore")
 	}
 
 	// (1.4) Verify the signature
 	valid_signature := userlib.DSVerify(public_key, cypher_text, signature.PubKey.N.Bytes())
 	if valid_signature != nil {
-		return nil
+		return errors.New("Cannot verify the sender is the real sender of the invitation")
 	}
-	// (2) Decrypt the chyper text to get file location
-	plain_txt, err_cyp := userlib.PKEDec(userdata.private_key, cypher_text)
-	if err_cyp != nil {
+	// (2) Decrypt the cypher text to get file location
+	invite_container, err := userlib.PKEDec(userdata.private_key, cypher_text)
+	if err != nil {
 		return nil
 	}
 
-	// (3) Unmarshal the invitation
+	// (3) Unmarshal the invite
 	var invitation Invite
-	err_mar := json.Unmarshal(plain_txt, &invitation)
-	if err_mar != nil {
-		return nil
+	err = json.Unmarshal(invite_container, &invitation)
+	if err != nil {
+		return errors.New("Cannot numarshal the invitation")
 	}
 
 	// (4) Verify that the invitation is for the correct file
 	if invitation.File != filename {
-		return nil
-	}
-	// (5) Verify that the invitation is for the correct owner
-	if invitation.Owner != senderUsername {
-		return nil
+		return errors.New("The invitation is not for the correct file")
 	}
 
 	// (6) Get the file location
-	file_location := invitation.Cypher_data_location
+	file_location := invitation.File_uuid
 
-	// (7) Unmarshal file_location to get uui.UUID
+	// (7) Unmarshal file_location to get uuid.UUID
 	var file_uuid uuid.UUID
 	err_marshalling := json.Unmarshal(file_location, &file_uuid)
 	if err_marshalling != nil {
@@ -734,6 +855,11 @@ func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid
 
 	// (8) Add "invite"	 to "invites_map"
 	userdata.invites_map[filename] = file_uuid
+
+	// add ourselves to the Editors list
+
+	// get the editors list from the invite struct
+
 	return nil
 }
 
@@ -765,10 +891,12 @@ func (userdata *User) RevokeAccess(filename string, recipientUsername string) er
 	new_file_location := uuid.New()
 	userlib.DatastoreSet(new_file_location, file_bytes)
 
+	// TODO: rehash the file with a new key
+
 	// (7) Update the file location in the user's file map
 	userdata.files[filename] = new_file_location
 
-	// (8) Update the file's Editor map with new location for every user except the recipient
+	// TODO (8) Update the file's Editor map with new location for every user except the recipient
 	for user, _ := range file.Editors {
 		if user != recipientUsername {
 			file.Editors[user] = new_file_location
