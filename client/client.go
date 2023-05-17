@@ -663,7 +663,7 @@ func (userdata *User) LoadFile(filename string) (content []byte, err error) {
 
 	// file traversal
 	for curr_node.Next != uuid.Nil {
-		curr_node_bytes, traverse_err := get_from_datastore(curr_node.Next, file.Hmac, file.Key)
+		curr_node_bytes, traverse_err := get_from_datastore(curr_node.Next, file.Hmac, file.Key) // both sentinel and the linked list blobs are encrypted with the file keys
 		if traverse_err != nil {
 			return nil, traverse_err
 		}
