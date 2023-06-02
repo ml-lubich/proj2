@@ -48,7 +48,6 @@ var _ = Describe("Client Tests", func() {
 
 	// A few user declarations that may be used for testing. Remember to initialize these before you
 	// attempt to use them!
-	var alice *client.User
 	var bob *client.User
 	var alice *client.User
 	// var doris *client.User
@@ -68,13 +67,6 @@ var _ = Describe("Client Tests", func() {
 	// A bunch of filenames that may be useful.
 	aliceFile := "aliceFile.txt"
 	bobFile := "bobFile.txt"
-	aliceFile := "aliceFile.txt"
-	// dorisFile := "dorisFile.txt"
-	// eveFile := "eveFile.txt"
-	// frankFile := "frankFile.txt"
-	// graceFile := "graceFile.txt"
-	// horaceFile := "horaceFile.txt"
-	// iraFile := "iraFile.txt"
 
 	BeforeEach(func() {
 		// This runs before each test within this Describe block (including nested tests).
