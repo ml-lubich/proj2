@@ -177,7 +177,7 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 
 			alice, err = client.InitUser("alice", defaultPassword)
-			Expect(err).To(BeNil())
+			Expect(err).ToNot(BeNil())
 
 			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
 			alice.StoreFile(aliceFile, []byte(contentOne))
