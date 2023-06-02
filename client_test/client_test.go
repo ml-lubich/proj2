@@ -8,9 +8,11 @@ import (
 	// about unused imports.
 	_ "encoding/hex"
 	_ "errors"
+	"math/rand"
 	_ "strconv"
 	_ "strings"
 	"testing"
+	"time"
 
 	// A "dot" import is used here so that the functions in the ginko and gomega
 	// modules can be used without an identifier. For example, Describe() and
@@ -26,6 +28,11 @@ import (
 func TestSetupAndExecution(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Client Tests")
+	// RunSpecs(t, "Advanced Tests")
+}
+
+func AdvancedTests(t *testing.T) {
+	RegisterFailHandler(Fail)
 }
 
 // ================================================
@@ -515,6 +522,14 @@ var _ = Describe("Client Tests", func() {
 			alice, err = client.InitUser("", defaultPassword)
 			Expect(err).ToNot(BeNil())
 
+			// create user with same username FAILLLL
+			userlib.DebugMsg("Initializing user.")
+			_, err := client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+
 			var string1 string
 			for i := 0; i < 66; i++ {
 				string1 += "7"
@@ -530,6 +545,244 @@ var _ = Describe("Client Tests", func() {
 			userlib.DebugMsg("Initializing user.")
 			alice, err = client.InitUser(string2, defaultPassword)
 			Expect(err).To(BeNil())
+
+			// share public file with bob
+			userlib.DebugMsg("alice sharing public file to bob")
+			err = alice.StoreFile("public.txt", []byte("public"))
+			Expect(err).To(BeNil())
+
+			// share the file with bob
+			userlib.DebugMsg("alice sharing file to bob")
+			invite, err := alice.CreateInvitation("public.txt", "bob")
+			Expect(err).To(BeNil())
+
+			// bob accepts invite
+			userlib.DebugMsg("bob accepting invite")
+			err = bob.AcceptInvitation(alice.Username, invite, "bob.txt")
+			Expect(err).To(BeNil())
+
+			/////////////////////////
+
+			// Test case logic
+			// Store a file with sensitive content
+			content := []byte("This is a confidential message")
+			err = alice.StoreFile("confidential.txt", content)
+			Expect(err).To(BeNil())
+
+			// Load the file and check if the content is decrypted correctly
+			loadedContent, err := alice.LoadFile("confidential.txt")
+			Expect(err).To(BeNil())
+			Expect(loadedContent).To(Equal(content))
+
+			// Test case logic
+			// Store a file with sensitive content
+			content = []byte("This is a confidential message")
+			err = alice.StoreFile("confidential.txt", content)
+			Expect(err).To(BeNil())
+
+			// Bob should not be able to access the file
+			loadedContent, err = bob.LoadFile("confidential.txt")
+			Expect(err).To(HaveOccurred())
+			Expect(loadedContent).To(BeNil())
+
+			// Test case logic
+			// Store a file
+			content = []byte("This is a file")
+			err = alice.StoreFile("file.txt", content)
+			Expect(err).To(BeNil())
+
+			// Load the file and modify the content
+			modifiedContent, err := alice.LoadFile("file.txt")
+			Expect(err).To(BeNil())
+			modifiedContent[0] = 'X'
+
+			modifiedContent[9] = byte('X')
+
+			// Load the file again and check if the content is different
+			loadedContent, err = alice.LoadFile("file.txt")
+			Expect(err).To(BeNil())
+			Expect(loadedContent).NotTo(Equal(modifiedContent))
+
+			// Test case logic
+			// Store a file with initial content
+			content = []byte("Original content")
+			err = alice.StoreFile("file1.txt", content)
+			Expect(err).To(BeNil())
+
+			// Append to the file
+			appendedContent := []byte("Appended content")
+			err = alice.AppendToFile("file1.txt", appendedContent)
+			Expect(err).To(BeNil())
+
+			// Load the file and check if the content reflects the appended data
+			loadedContent, err = alice.LoadFile("file1.txt")
+			Expect(err).To(BeNil())
+			Expect(loadedContent).To(Equal(append(content, appendedContent...)))
+
+			// Store a different file with its own content
+			otherContent := []byte("Other content")
+			err = alice.StoreFile("file2.txt", otherContent)
+			Expect(err).To(BeNil())
+
+			// Append to the different file
+			otherAppendedContent := []byte("Other appended content")
+			err = alice.AppendToFile("file2.txt", otherAppendedContent)
+			Expect(err).To(BeNil())
+
+			// Load the different file and check if the content reflects the appended data
+			otherLoadedContent, err := alice.LoadFile("file2.txt")
+			Expect(err).To(BeNil())
+			Expect(otherLoadedContent).To(Equal(append(otherContent, otherAppendedContent...)))
+
+			// Test case logic
+			// Store a file
+			content = []byte("Original content")
+			err = alice.StoreFile("file.txt", content)
+			Expect(err).To(BeNil())
+
+			// Load the file and modify the content
+			modifiedContent, err = alice.LoadFile("file.txt")
+			Expect(err).To(BeNil())
+			modifiedContent[0] = 'M'
+
+			// Load the file again and check if the content is different
+			loadedContent, err = alice.LoadFile("file.txt")
+			Expect(err).To(BeNil())
+			Expect(loadedContent).NotTo(Equal(modifiedContent))
+
+			// Test case logic
+			rand.Seed(time.Now().UnixNano())
+
+			// Store a file with initial content
+			content = []byte("Original content")
+			err = alice.StoreFile("file.txt", content)
+			Expect(err).To(BeNil())
+
+			// Randomly modify the content in the datastore
+			for i := 0; i < 1000; i++ {
+				modifiedContent = make([]byte, len(content))
+				copy(modifiedContent, content)
+
+				// Randomly modify a byte in the content
+				randomIndex := rand.Intn(len(modifiedContent))
+				modifiedContent[randomIndex] = 'X'
+
+				// Store the modified content back to the file
+				err := alice.StoreFile("file.txt", modifiedContent)
+				Expect(err).To(BeNil())
+			}
+
+			// Load the file and check if the content is the last modified version
+			loadedContent, err = alice.LoadFile("file.txt")
+			Expect(err).To(BeNil())
+
+			// Verify that the loaded content is the last modified version
+			Expect(loadedContent).To(Equal(modifiedContent))
+
+			// Perform revocations on the file that recipient does not have
+			err = alice.RevokeAccess("file.txt", bob.Username)
+			Expect(err).ToNot(BeNil())
+
+			// Perform revocations on the file that recipient does have
+			err = alice.RevokeAccess("public.txt", bob.Username)
+			Expect(err).To(BeNil())
+
+			// Attempt to load the file with Bob, expecting an error
+			_, err = bob.LoadFile("file.txt")
+			Expect(err).ToNot(BeNil())
+
+			// verify that alice still has access to the file
+			loadedContent, err = alice.LoadFile("file.txt")
+			Expect(err).To(BeNil())
+			Expect(loadedContent).To(Equal(modifiedContent))
+
+			rand.Seed(time.Now().UnixNano())
+
+			// Store a file with initial content
+			content = []byte("Original content")
+			err = alice.StoreFile("file.txt", content)
+			Expect(err).To(BeNil())
+
+			// Randomly modify the content in the datastore
+			for i := 0; i < 10; i++ {
+				modifiedContent = make([]byte, len(content))
+				copy(modifiedContent, content)
+
+				// Randomly modify a byte in the content
+				randomIndex := rand.Intn(len(modifiedContent))
+				modifiedContent[randomIndex] = 'X'
+
+				// Store the modified content back to the file
+				err := alice.StoreFile("file.txt", modifiedContent)
+				Expect(err).To(BeNil())
+			}
+
+			// Load the file and check if the content is the last modified version
+			loadedContent, err = alice.LoadFile("file.txt")
+			Expect(err).To(BeNil())
+			// Verify that the loaded content is the last modified version
+			Expect(loadedContent).To(Equal(modifiedContent))
+
+			// userlib.DebugMsg("Initializing user Alice")
+			// alice, err = client.InitUser("alice", defaultPassword)
+			// Expect(err).ToNot(BeNil())
+
+			userlib.DebugMsg("Alice storing file %s with content: %s", aliceFile, contentOne)
+			alice.StoreFile(aliceFile, []byte(contentOne))
+
 		})
+
+		Specify("Accepting Before invite ", func() {
+			userlib.DebugMsg("Initializing users Alice")
+			aliceDesktop, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("Initializing user Bob")
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("Initializing user Charles")
+			bob, err = client.InitUser("charles", defaultPassword)
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("aliceDesktop storing file %s with content: %s", aliceFile, contentOne)
+			err = aliceDesktop.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("aliceDesktop creating invite for charles.")
+			invite, err := aliceDesktop.CreateInvitation(aliceFile, "charles")
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("Bob accepting invite from Alice under filename %s.", bobFile)
+			err = bob.AcceptInvitation("alice", invite, bobFile)
+			Expect(err).To(BeNil())
+		})
+
+		Specify("Create/Accept Invite Functionality with multiple users ", func() {
+			userlib.DebugMsg("Initializing users Alice")
+			aliceDesktop, err = client.InitUser("alice", defaultPassword)
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("Initializing user Bob")
+			bob, err = client.InitUser("bob", defaultPassword)
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("aliceDesktop storing file %s with content: %s", aliceFile, contentOne)
+			err = aliceDesktop.StoreFile(aliceFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("bob storing file %s with content: %s", bobFile, contentOne)
+			err = bob.StoreFile(bobFile, []byte(contentOne))
+			Expect(err).To(BeNil())
+
+			userlib.DebugMsg("aliceDesktop creating invite for Bob.")
+			invite, err := aliceDesktop.CreateInvitation(aliceFile, "bob")
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("Bob accepting invite from Alice under filename %s.", bobFile)
+			err = bob.AcceptInvitation("alice", invite, bobFile)
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("Bob appending to file %s, content: %s", bobFile, contentTwo)
+			err = bob.AppendToFile(bobFile, []byte(contentTwo))
+			Expect(err).To(BeNil())
+			userlib.DebugMsg("aliceDesktop appending to file %s, content: %s", aliceFile, contentThree)
+			err = aliceDesktop.AppendToFile(aliceFile, []byte(contentThree))
+			Expect(err).To(BeNil())
+		})
+
 	})
+
 })
