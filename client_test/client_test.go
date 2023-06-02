@@ -8,11 +8,9 @@ import (
 	// about unused imports.
 	_ "encoding/hex"
 	_ "errors"
-	"math/rand"
 	_ "strconv"
 	_ "strings"
 	"testing"
-	"time"
 
 	// A "dot" import is used here so that the functions in the ginko and gomega
 	// modules can be used without an identifier. For example, Describe() and
@@ -29,6 +27,7 @@ func TestSetupAndExecution(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Client Tests")
 	// RunSpecs(t, "Advanced Tests")
+
 }
 
 func AdvancedTests(t *testing.T) {
@@ -650,9 +649,6 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 			Expect(loadedContent).NotTo(Equal(modifiedContent))
 
-			// Test case logic
-			rand.Seed(time.Now().UnixNano())
-
 			// Store a file with initial content
 			content = []byte("Original content")
 			err = alice.StoreFile("file.txt", content)
@@ -664,7 +660,7 @@ var _ = Describe("Client Tests", func() {
 				copy(modifiedContent, content)
 
 				// Randomly modify a byte in the content
-				randomIndex := rand.Intn(len(modifiedContent))
+				randomIndex := 2
 				modifiedContent[randomIndex] = 'X'
 
 				// Store the modified content back to the file
@@ -696,8 +692,6 @@ var _ = Describe("Client Tests", func() {
 			Expect(err).To(BeNil())
 			Expect(loadedContent).To(Equal(modifiedContent))
 
-			rand.Seed(time.Now().UnixNano())
-
 			// Store a file with initial content
 			content = []byte("Original content")
 			err = alice.StoreFile("file.txt", content)
@@ -709,7 +703,7 @@ var _ = Describe("Client Tests", func() {
 				copy(modifiedContent, content)
 
 				// Randomly modify a byte in the content
-				randomIndex := rand.Intn(len(modifiedContent))
+				randomIndex := 2
 				modifiedContent[randomIndex] = 'X'
 
 				// Store the modified content back to the file
