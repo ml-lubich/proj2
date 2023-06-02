@@ -796,12 +796,9 @@ func (userdata *User) CreateInvitation(filename string, recipientUsername string
 		// important because we can revoke invitations using this shared header (since the sharing invitation is stored at a determinstic location with respect to the recipient's username and the filename of the shared file)
 		fileMetadataStruct.SharedHeaders[recipientUsername] = fileHeaderAccessToken
 		// save the updated file metadata struct
-		fileMetadataStructMarshalled, err := json.Marshal(fileMetadataStruct)
-		if err != nil {
-			return uuid.Nil, errors.New("Error when converting file metadata struct to file metadata bytes.")
-		}
-		err = setObjectToDatastore(fileMetadataStructMarshalled, fileMetadataAccessToken)
+		err = setObjectToDatastore(fileMetadataStruct, fileMetadataAccessToken)
 	}
+
 	// if sender is not owner, do not do anything (we get the shared header from the file metadata struct, and share that instead in the share struct)
 
 	// COMMON STEPS
