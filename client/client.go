@@ -1,14 +1,10 @@
 package client
 
-// MAKE SURE YOU'RE SUPPORTING MULTI-USER SESSIONS
-
 // CS 161 Project 2
-
-// You MUST NOT change these default imports. ANY additional imports
-// may break the autograder!
 
 import (
 	"encoding/json"
+	"fmt"
 
 	userlib "github.com/cs161-staff/project2-userlib"
 	"github.com/google/uuid"
@@ -18,7 +14,6 @@ import (
 	// Useful for string manipulation
 
 	// Useful for formatting strings (e.g. `fmt.Sprintf`).
-	"fmt"
 
 	// Useful for creating new error messages to return using errors.New("...")
 	"errors"
@@ -27,918 +22,1205 @@ import (
 	_ "strconv"
 )
 
-// This serves two purposes: it shows you a few useful primitives,
-// and suppresses warnings for imports not being used. It can be
-// safely deleted!
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-func someUsefulThings() {
+// ====================================================================================================
+// Structs
+// ====================================================================================================
 
-	// Creates a random UUID.
-	randomUUID := uuid.New()
-
-	// Prints the UUID as a string. %v prints the value in a default format.
-	// See https://pkg.go.dev/fmt#hdr-Printing for all Golang format string flags.
-	userlib.DebugMsg("Random UUID: %v", randomUUID.String())
-
-	// Creates a UUID deterministically, from a sequence of bytes.
-	hash := userlib.Hash([]byte("user-structs/alice"))
-	deterministicUUID, err := uuid.FromBytes(hash[:16])
-	if err != nil {
-		// Normally, we would `return err` here. But, since this function doesn't return anything,
-		// we can just panic to terminate execution. ALWAYS, ALWAYS, ALWAYS check for errors! Your
-		// code should have hundreds of "if err != nil { return err }" statements by the end of this
-		// project. You probably want to avoid using panic statements in your own code.
-		panic(errors.New("An error occurred while generating a UUID: " + err.Error()))
-	}
-	userlib.DebugMsg("Deterministic UUID: %v", deterministicUUID.String())
-
-	// Declares a Course struct type, creates an instance of it, and marshals it into JSON.
-	type Course struct {
-		name      string
-		professor []byte
-	}
-
-	course := Course{"CS 161", []byte("Nicholas Weaver")}
-	courseBytes, err := json.Marshal(course)
-	if err != nil {
-		panic(err)
-	}
-
-	userlib.DebugMsg("Struct: %v", course)
-	userlib.DebugMsg("JSON Data: %v", courseBytes)
-
-	// Generate a random private/public keypair.
-	// The "_" indicates that we don't check for the error case here.
-	var pk userlib.PKEEncKey
-	var sk userlib.PKEDecKey
-	pk, sk, err = userlib.PKEKeyGen()
-	if err != nil {
-		panic(err)
-	}
-	userlib.DebugMsg("PKE Key Pair: (%v, %v)", pk, sk)
-
-	// Here's an example of how to use HBKDF to generate a new key from an input key.
-	// Tip: generate a new key everywhere you possibly can! It's easier to generate new keys on the fly
-	// instead of trying to think about all of the ways a key reuse attack could be performed. It's also easier to
-	// store one key and derive multiple keys from that one key, rather than
-	originalKey := userlib.RandomBytes(16)
-	derivedKey, err := userlib.HashKDF(originalKey, []byte("mac-key"))
-	if err != nil {
-		panic(err)
-	}
-
-	userlib.DebugMsg("Original Key: %v", originalKey)
-	userlib.DebugMsg("Derived Key: %v", derivedKey)
-
-	// A couple of tips on converting between string and []byte:
-	// To convert from string to []byte, use []byte("some-string-here")
-	// To convert from []byte to string for debugging, use fmt.Sprintf("hello world: %s", some_byte_arr).
-	// To convert from []byte to string for use in a hashmap, use hex.EncodeToString(some_byte_arr).
-	// When frequently converting between []byte and string, just marshal and unmarshal the data.
-	//
-	// Read more: https://go.dev/blog/strings
-
-	// Here's an example of string interpolation!
-	_ = fmt.Sprintf("%s_%d", "file", 1)
+type AccessToken struct {
+	// Provides all three components to access an object in the datastore.
+	// 1. uuid of where the
+	// 2. hmac of the object
+	// 3. string
+	// Note: it is only secure to verify / sign the encrypted data first, then decrypt the data
+	// Note 2: it is only secure to encrypt the data first, then verify / sign the data
+	U  uuid.UUID
+	HK []byte
+	EK []byte
 }
 
-// >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
-// ----- TREE CLASS -----
-type Node struct {
-	id       string
-	children []*Node
+type Share struct {
+	Owner      string
+	Recipient  string
+	FileHeader AccessToken
 }
 
-type Tree struct {
-	root *Node
+type Container struct {
+	O []byte
+	H []byte
 }
 
-func (n *Node) GetDescendants() []*Node {
-	descendants := []*Node{}
-	n.collectDescendants(&descendants)
-	return descendants
-}
-
-func (n *Node) collectDescendants(descendants *[]*Node) {
-	for _, child := range n.children {
-		*descendants = append(*descendants, child)
-		child.collectDescendants(descendants)
-	}
-}
-
-func (t *Tree) Insert(id string, data string, parent *Node) {
-	node := &Node{id: id, data: data}
-	if parent == nil {
-		t.root = node
-	} else {
-		parent.children = append(parent.children, node)
-	}
-}
-
-func (t *Tree) RemoveNode(id string) {
-	t.root = t.removeNode(t.root, id)
-}
-
-func (t *Tree) removeNode(node *Node, id string) *Node {
-	if node == nil {
-		return nil
-	}
-
-	if node.id == id {
-		return nil
-	}
-
-	resultChildren := []*Node{}
-	for _, child := range node.children {
-		newChild := t.removeNode(child, id)
-		if newChild != nil {
-			resultChildren = append(resultChildren, newChild)
-		}
-	}
-
-	node.children = resultChildren
-	return node
-}
-
-// ----- INVITE CLASS ----- $
-type Invite struct { // points to sentinel
-	File            string
-	Owner           string
-	Signed          []byte
-	File_uuid       []byte // uuid.UUID
-	File_sym_key    []byte // confidentiality: unlocks the file (needed for revocation when we rehash the file)
-	File_hmac_key   []byte // integrity: hmac as well (needed for revocation when we rehash the file)
-	Editor_uuid     []byte // editor class that stores the usernames of users that are authorized to edit the file in a tree structure (hierarchical structure)
-	Editor_sym_key  []byte // confidentiality: (needed for revocation when we rehash the file)
-	Editor_hmac_key []byte // integrity: hmac as well (needed for revocation when we rehash the file)
-}
-
-// ----- EDITOR CLASS -----
-type Editors struct {
-	editors_tree Node
-} // TODO finish implementation for editor class
-
-// ----- FILE CLASSES -----
-// contains the data of the file in chyptertxt and hmac
-type File_container struct {
-	Cypher_text []byte
-	Hmac        []byte
-}
-
-type File struct {
-	Sentinel_uuid uuid.UUID // this is going to change when invite is revoked
+type FileMetadata struct {
 	Owner         string
-	Editors       map[string]uuid.UUID // not sure about this
-	Hmac          []byte
-	Key           []byte
-	Iv            []byte
-	Editors_uuid  uuid.UUID // this is going to change when invite is revoked
+	Header        AccessToken
+	SharedHeaders map[string]AccessToken
 }
 
-type File_sentinel struct {
-	Head uuid.UUID
-	End  uuid.UUID
+// used for sharing files with others (another layer of abstraction to ensure security)
+type FileHeader struct {
+	SentinelAccess AccessToken
 }
 
-type File_node struct {
-	Next uuid.UUID
-	Data []byte
+type FileSentinel struct {
+	Start AccessToken
+	End   AccessToken
 }
 
-// ----- USER CLASS -----
+type FileBlob struct {
+	HasNext bool
+	Next    AccessToken
+	Content AccessToken
+}
+
+type FileContent struct {
+	Content []byte
+}
+
 type User struct {
-	uuid             uuid.UUID // own uuid
-	Username         string
-	private_key      userlib.PKEDecKey      // userlib.PrivateKeyType // needs to be stored in the keystore ????
-	public_key       userlib.PKEEncKey      // userlib.PublicKeyType
-	signature_key    userlib.PrivateKeyType // keep this one private
-	signature_verify userlib.PublicKeyType  // i can share this one
-	files            map[string]uuid.UUID
-	invites_map      map[string]uuid.UUID // invites received
-	master_key       []byte               // to check if you're the owner of the file & remove persmission
+	Username   string
+	Password   string
+	PrivateKey userlib.PrivateKeyType
+	SignKey    userlib.DSSignKey
 }
 
-func InitUser(username string, password string) (userdataptr *User, err error) {
-	// Check if the username or psw are empty
-	if username == "" || password == "" {
-		return nil, errors.New("empty username or password")
-	}
+// =================================================================================================
+// Authentication Helpers
+// =================================================================================================
 
-	// Check if a user with the same username already exists
-	_, exists := userlib.KeystoreGet(username + "public-key")
-	if exists {
-		return nil, errors.New("User already exists with the provided username")
-	}
+func getUUID(deterministicData []byte) uuid.UUID {
+	// get deterministic uuid from string
+	hash := userlib.Hash(deterministicData)
+	uuid := uuid.NewSHA1(uuid.Nil, hash)
+	return uuid
+}
 
-	// creating Public & Private keys
-	var pk userlib.PKEEncKey // HashKDF
-	var sk userlib.PKEDecKey
-	pk, sk, err = userlib.PKEKeyGen()
+func getSalt(username string) ([]byte, error) {
+	uuidSalt := getUUID([]byte(username + "salt"))
+	salt, ok := userlib.DatastoreGet(uuidSalt)
+	if !ok {
+		return nil, errors.New("Error when retrieving user salt.")
+	}
+	return salt, nil
+}
+
+func getPasswordHash(username string) ([]byte, error) {
+	uuidPasswordHash := getUUID([]byte(username + "passwordHash"))
+	passwordHash, ok := userlib.DatastoreGet(uuidPasswordHash)
+	if !ok {
+		return nil, errors.New("Error when retrieving user password hash.")
+	}
+	return passwordHash, nil
+}
+
+func getPasswordSalted(username string, password string) ([]byte, error) {
+	salt, err := getSalt(username)
 	if err != nil {
 		return nil, err
 	}
+	passwordSalted := userlib.Argon2Key([]byte(password), salt, 16)
+	return passwordSalted, nil
+}
 
-	pk, sk, err_key := userlib.PKEKeyGen()
-	if err_key != nil {
-		return nil, err_key
-	}
-	// creating Signature
-	sign_key, sign_verify, err := userlib.DSKeyGen()
-
-	// saving public-key & signature-verify into keystore
-	var err_pub_key error = userlib.KeystoreSet(username+"public-key", pk)
-	if err_pub_key != nil {
-		return nil, err_pub_key
-	}
-	var err_sign_key error = userlib.KeystoreSet(username+"key-verify", sign_verify)
-	if err_sign_key != nil {
-		return nil, err_sign_key
-	}
-
-	client := User{
-		uuid:             GenerateUUID(username, password),
-		Username:         username,
-		private_key:      sk,          // CHANGE THIS - how to generate private key?
-		public_key:       pk,          // CHANGE THIS - how to generate public key?
-		signature_key:    sign_key,    // this one must kept private
-		signature_verify: sign_verify, // i can share this one
-		files:            make(map[string]uuid.UUID),
-		invites_map:      make(map[string]uuid.UUID),
-		master_key:       userlib.RandomBytes(16)}
-
-	// storing to datastore
-	marshalled_bytes, err := json.Marshal(client)
+func authenticateUser(username string, passwordSalted []byte) (isAuthenticated bool, err error) {
+	userPasswordHashStored, err := getPasswordHash(username)
 	if err != nil {
-		return nil, errors.New("Error while marshalling user")
+		return false, errors.New("Error when retrieving user password hash.")
 	}
-	// encrypt bytes
-
-	// SAVING TO DATASTORE
-	// generating encrypted key
-	salt := userlib.Hash([]byte(username))
-	enc_key := userlib.Argon2Key([]byte(password), salt, 16)
-
-	// generating chyper-text
-	iv := userlib.RandomBytes(16)
-	chyper_text_bytes := userlib.SymEnc(enc_key, iv, marshalled_bytes)
-
-	// saving chyper text to data-store
-	userlib.DatastoreSet(client.uuid, chyper_text_bytes)
-
-	return &client, nil
+	userPasswordHash := userlib.Hash(passwordSalted)
+	isAuthenticated = userlib.HMACEqual(userPasswordHash, userPasswordHashStored)
+	return isAuthenticated, nil
 }
 
-func GetUser(username string, password string) (userdataptr *User, err error) {
-
-	// retrieving chypertext of user
-	cypher_text, ok := userlib.DatastoreGet(GenerateUUID(username, password))
-	if !ok {
-		return nil, errors.New("User not found or invalid credentials")
-	}
-
-	// regenerating the key to get the user
-	enc_key := userlib.Argon2Key([]byte(password), userlib.Hash([]byte(username)), 16)
-
-	// decrypting the user
-	marshal_user := userlib.SymDec(enc_key, cypher_text)
-
-	// unmarshalling the user to retrieve the object
-	var userdata User
-	err = json.Unmarshal(marshal_user, &userdata)
+func checkHmac(containerObject []byte, containerHmac []byte, hmacKey []byte) (ok bool, error error) {
+	calculatedHmac, err := userlib.HMACEval(hmacKey, containerObject)
 	if err != nil {
-		return nil, errors.New("Error while unmarshalling user")
+		return false, err
 	}
-	return &userdata, nil
-}
-
-// HELPER FUNCTIONS
-// TODO
-func (userdata *User) is_file_in_user_filespace(filename string) bool {
-	// check if user has access to file by checking either in the files list or the invites list
-	if _, ok := userdata.files[filename]; ok {
-		return true
-	}
-	if invite_uuid, ok := userdata.invites_map[filename]; ok {
-		return true
-	}
-	return false
-}
-
-func (userdata *User) is_owner(filename string) bool {
-	// go through the map of files and check if the filename is there
-	// all files that are owned by the user are stored in the files list
-	// all files that the user has in their file space is store either in the files list or the invites list
-	if _, ok := userdata.files[filename]; ok {
-		return true
-	}
-	return false
-}
-
-func (userdata *User) is_invited(filename string) bool {
-	// check if the file is in the invites list
-	if _, ok := userdata.invites_map[filename]; ok {
-		return true
-	}
-	return false
-}
-
-func save_to_datastore(uuid uuid.UUID,
-	obj interface{},
-	hmac_key []byte,
-	symm_key []byte,
-	iv []byte) (err error) {
-
-	obj_bytes, err := json.Marshal(obj)
-	if err != nil {
-		return errors.New("Error when marshalling")
-	}
-
-	var container File_container
-	container.Cypher_text = userlib.SymEnc(symm_key, iv, obj_bytes)
-
-	hmac, err_hmac := userlib.HMACEval(hmac_key, container.Cypher_text)
-	if err_hmac != nil {
-		return errors.New("error while computing HMAC")
-	}
-
-	container.Hmac = hmac
-
-	marshalled_container, err_mar := json.Marshal(container)
-	if err_mar != nil {
-		return errors.New("error while marshalling")
-	}
-
-	userlib.DatastoreSet(uuid, marshalled_container)
-	return nil
-}
-
-func get_from_datastore(uuid uuid.UUID,
-	hmac []byte,
-	symm_key []byte) (obj interface{}, err error) {
-
-	bytes, empty := userlib.DatastoreGet(uuid)
-	if !empty {
-		// print the UUID
-		fmt.Println("UUID:", uuid.String())
-		return nil, errors.New("No entry found with UUID in Datastore.")
-	}
-
-	// unmarshalling the content
-	var container File_container
-	err = json.Unmarshal(bytes, &container)
-	if err != nil {
-		return nil, errors.New("Error when unmarshalling")
-	}
-
-	//cheking the HMACs are the same
-	is_same, err_hmac := is_hmac_match(container.Cypher_text, container.Hmac, hmac)
-	if err_hmac != nil {
-		return nil, err_hmac
-	}
-	if !is_same {
-		// print hmacs line by line
-		fmt.Println("HMACs are different\n===\nContainer")
-		fmt.Println(container.Hmac)
-		fmt.Println("===\nHMAC")
-		fmt.Println(hmac)
-		return nil, errors.New("HMACs do not match")
-	}
-
-	data_bytes := userlib.SymDec(symm_key, container.Cypher_text)
-
-	// unmarshalling the data
-	err = json.Unmarshal(data_bytes, &obj)
-	if err != nil {
-		return nil, errors.New("Error when unmarshalling")
-	}
-
-	return obj, nil
-}
-
-func is_hmac_match(ciphertext []byte,
-	hmac []byte,
-	key []byte) (equal bool, err error) {
-
-	hmac_from_cipher, err_hmac := userlib.HMACEval(key, ciphertext)
-	if err_hmac != nil {
-		return false, err_hmac
-	}
-
-	//Check if HMAC's Ciphertext is equal to the stored HMAC
-	if !userlib.HMACEqual(hmac_from_cipher, hmac) {
-		return false, errors.New("HMACs are different")
+	if !userlib.HMACEqual(calculatedHmac, containerHmac) {
+		return false, errors.New(fmt.Sprintf("HMACs do not match.\nHMAC:\"%s\"ContainerHMAC:\"%s\"", calculatedHmac, containerHmac))
 	}
 	return true, nil
 }
 
-func (userdata *User) get_file(filename string) (file_obj *File, err error) {
-	// must be owner of the file to get the file struct
-	// since only owner has access to the file struct
-	// check if the filename is in the userdata files map
-	// the user must be the owner of the file
-	// return nil, errors.New("User is not the owner of the file and cannot get the file struct")
-	// return nil, errors.New("User is not invited to the file and cannot get the file struct")
-	// } else if !userdata.is_file_in_user_filespace(filename) { // if the file is not in the user's filespace, then we cannot get the file
-
-	// the user is neither the owner nor invited to the file
-	// }
-
-	// get the file from the datastore
-	// file_bytes, err := get_from_datastore(userdata.files[filename], userdata.hmac_key, userdata.symm_key)
-
-	// return file_obj, nil
-
-	if userdata.is_owner(filename) { // the user is owner
-		
-		file_location := userdata.files[filename]
-		file_obj, err = get_from_datastore(file_location, userdata.hmac_key, userdata.symm_key)
-		if err != nil {
-			return errros.New("Error while getting file from datastore")
-		}
-		return file_obj, nil
-
-	} else if userdata.is_invited(filename) { // the user is invited to the file
-		invite_location := userdata.invites_map[filename]
-		// getting the file location from the invite
-		invite_obj, err := get_from_datastore(invite_location, userdata.hmac_key, userdata.symm_key)
-		if err != nil {
-			return errors.New("Error while getting invite from datastore - with editor")
-		}
-		// getting the file location from the invite
-		invite := invite_obj.(Invite)
-		file_location := invite.File_location
-		//getting the file from the file location
-		file_obj, err = get_from_datastore(file_location, userdata.hmac_key, userdata.symm_key)
-		if err != nil {
-			return errors.New("Error while getting file from datastore - with editor")
-		}
-		return file_obj, nil
+func getRandomAccessToken() (accessToken AccessToken) {
+	randomUuid := uuid.New()
+	randomHmacKey := userlib.RandomBytes(16)
+	randomEncryptionKey := userlib.RandomBytes(16)
+	accessToken = AccessToken{
+		U:  randomUuid,
+		HK: randomHmacKey,
+		EK: randomEncryptionKey,
 	}
-
-	return nil, errors.New("This file does not exist, or the user is not the owner of the file, or the user has not been invited to the file")
+	return accessToken
 }
 
-// TODO
-func (userdata *User) get_sentinel(filename string) (file_sentinel File_sentinel, err error) {
-	// can be owner or user shared to the file, but the paths are different
+// func getFileId(user *User, filename string) (fileId []byte) {
+// 	// hash the filename with respect to the user's symmetric key
+// 	passwordSalted, err := getPasswordSalted(user.Username, user.Password)
+// 	if err != nil {
+// 		return nil
+// 	}
+// 	fileIdEncryptionKey, err := userlib.HashKDF(passwordSalted, []byte(filename))
+// 	if err != nil {
+// 		return nil
+// 	}
+// 	fileIdEncryptionKey = fileIdEncryptionKey[:16]
+// 	iv := userlib.RandomBytes(16)
+// 	fileId = userlib.SymEnc(fileIdEncryptionKey, iv, []byte(filename))
+// 	return fileId
+// }
 
-	if userdata.is_owner(filename) {
-		// get the file from the datastore
-		file_location := userdata.files[filename]
-		file_bytes, err := get_from_datastore(file_location, userdata.hmac_key, userdata.symm_key)
-		if err != nil {
-			return nil, errors.New("Error when getting file from datastore")
-		}
-		return file_bytes.(*File), nil
-
-	} else {
-
-		// get keys
-		file_uuid, hmac_key, symm_key := userdata.get_file_keys()
-
-		// if not owner, then must get sentinel from the invites
-		invite_uuid, err_invite := uuid.FromBytes(file_uuid)
-		if err_invite != nil {
-			return nil, nil, errors.New("Cannot convert bytes to invite UUID")
-		}
-
-		invite_bytes, err := get_from_datastore(invite_uuid, hmac_key, symm_key)
-		if err != nil {
-			return nil, err
-		}
-
-		file, ok := invite_bytes.(Invite)
-		if !ok {
-			return nil, nil, errors.New("Cannot convert invite bytes to Invite")
-		}
-
-		sentinel_bytes, err := get_from_datastore(file.Head, file.Hmac, file.Key)
-		if err != nil {
-			return nil, nil, err
-		}
-		sentinel, ok := sentinel_bytes.(File_sentinel)
-		if !ok {
-			return nil, nil, errors.New("Cannot convert sentinel bytes to File_sentinel")
-		}
-
-		err_unmar_sentinel := json.Unmarshal(sentinel_bytes, &sentinel)
-		if err_unmar_sentinel != nil {
-			return nil, nil, errors.New("Error while unmarshalling sentinel")
-		}
-	}
-
-	return sentinel, nil
+func getFileMetadataUuid(passwordSalted []byte, filename string) (fileMetadataUuid uuid.UUID) {
+	// get the deterministic file UUID from the filename symmterically encrypted with the user's symmetric key
+	// generate deterministic file uuid (file ID)
+	// hash the filename to make it one length
+	filenameHash := userlib.Hash([]byte(filename))
+	filenameEncrypted := userlib.SymDec(passwordSalted, filenameHash)
+	fileMetadataUuid = getUUID(filenameEncrypted)
+	return fileMetadataUuid
 }
 
-func (userdata *User) get_file_keys(uuid byte[], hmac_key byte[], symm_key byte[]) {
-	// regenerating keys
-	key, key_err := userlib.HashKDF(userdata.master_key, []byte(filename))
-	if key_err != nil {
-		return nil, key_err
+func getFileMetadataHmacKey(passwordSalted []byte, filename string) (fileHmacKey []byte, err error) {
+	// get the deterministic file HMAC key from the filename derived from HashKDF of passwordSalted
+	filenameHash := userlib.Hash([]byte(filename + "hmac"))
+	fileHmacKey, err = userlib.HashKDF(passwordSalted, filenameHash)
+	fileHmacKey = fileHmacKey[:16]
+	if err != nil {
+		return nil, err
 	}
-
-	uuid, hmac_key, symm_key := key[:16], key[16:32], key[48:64]
-	return uuid, hmac_key, symm_key
+	return fileHmacKey, nil
 }
 
-// TODO
+func getFileMetadataEncryptionKey(passwordSalted []byte, filename string) (fileEncryptionKey []byte, err error) {
+	// get the deterministic file symmetric encryption key from the filename derived from HashKDF of passwordSalted
+	filenameHash := userlib.Hash([]byte(filename + "encryption"))
+	fileEncryptionKey, err = userlib.HashKDF(passwordSalted, filenameHash)
+	fileEncryptionKey = fileEncryptionKey[:16]
+	if err != nil {
+		return nil, err
+	}
+	return fileEncryptionKey, nil
+}
+
+// =================================================================================================
+// Authentication Helpers
+// =================================================================================================
+
+// =================================================================================================
+// Datastore Helpers
+// =================================================================================================
+
+func getObjectFromDatastore(accessToken AccessToken) ([]byte, error) {
+	objectMarshalled, ok := userlib.DatastoreGet(accessToken.U)
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("No data found at UUID: \"%v\"", accessToken.U))
+	}
+	// unmarshalling the content
+	var container Container
+	err := json.Unmarshal(objectMarshalled, &container)
+	if err != nil {
+		return nil, errors.New(fmt.Sprintf("Error when unmarshalling this container with UUID: \"%v\"", accessToken.U))
+	}
+	// in order to ensure security, verify then decrypt
+	// cheking the HMACs are the same
+	ok, err = checkHmac(container.O, container.H, accessToken.HK)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, err
+	}
+	// decrypt the content
+	object := userlib.SymDec(accessToken.EK, container.O)
+	return object, nil
+}
+
+func setObjectToDatastore(object interface{}, accessToken AccessToken) (err error) {
+	// marshal the object
+	objectMarshalled, err := json.Marshal(object)
+	if err != nil {
+		return errors.New("Error when marshalling the object.")
+	}
+	// encrypt and sign the object
+	iv := userlib.RandomBytes(16)
+	objectEncrypted := userlib.SymEnc(accessToken.EK, iv, objectMarshalled)
+	containerHmac, err := userlib.HMACEval(accessToken.HK, objectEncrypted)
+	if err != nil {
+		return err
+	}
+	// create container
+	container := Container{
+		O: objectEncrypted,
+		H: containerHmac,
+	}
+	// marshal the container
+	bytes, err := json.Marshal(container)
+	if err != nil {
+		return err
+	}
+	// set the container in the datastore
+	userlib.DatastoreSet(accessToken.U, bytes)
+	return nil
+}
+
+func deleteObjectFromDatastore(accessToken AccessToken) (err error) {
+	userlib.DatastoreDelete(accessToken.U)
+	return nil
+}
+
+// =================================================================================================
+// Datastore Helpers
+// =================================================================================================
+
+func InitUser(username string, password string) (userdataptr *User, err error) {
+	if username == "" {
+		return nil, errors.New("No username has been entered.")
+	}
+	_, userExists := userlib.KeystoreGet(username + "publicKey")
+	if userExists {
+		return nil, errors.New(fmt.Sprintf("The user with username \"%s\" already exists.", username))
+	}
+
+	// generate public, private, and digital signature keys
+	publicKey, privateKey, err := userlib.PKEKeyGen()
+	if err != nil {
+		return nil, err
+	}
+	signKey, verifyKey, err := userlib.DSKeyGen()
+
+	// save public key and digital signature verify key to datastore
+	err = userlib.KeystoreSet(username+"publicKey", publicKey)
+	if err != nil {
+		return nil, err
+	}
+	err = userlib.KeystoreSet(username+"verifyKey", verifyKey)
+	if err != nil {
+		return nil, err
+	}
+	user := User{
+		Username:   username,
+		Password:   password,
+		PrivateKey: privateKey,
+		SignKey:    signKey,
+	}
+
+	// encrypt and HMAC the user
+	salt := userlib.RandomBytes(512)
+	passwordSalted := userlib.Argon2Key([]byte(password), salt, 16)
+	// hashing the salted password since user passwords are not guaranteed to be globally unique
+	passwordHash := userlib.Hash(passwordSalted)
+	// encrypt and hmac the user struct
+	if err != nil {
+		return nil, err
+	}
+	userEncryptionKey, err := userlib.HashKDF(passwordSalted, []byte("encryption"))
+	userEncryptionKey = userEncryptionKey[:16]
+	if err != nil {
+		return nil, err
+	}
+	userUuid := getUUID([]byte(username + "user"))
+	userHmacKey, err := userlib.HashKDF(passwordSalted, []byte("hmac"))
+	userHmacKey = userHmacKey[:16]
+	if err != nil {
+		return nil, err
+	}
+	userAccessToken := AccessToken{
+		U:  userUuid,
+		HK: userHmacKey,
+		EK: userEncryptionKey,
+	}
+	// save the user to datastore
+	err = setObjectToDatastore(user, userAccessToken)
+	// store the password hash in datastore
+	uuidPasswordHash := getUUID([]byte(username + "passwordHash"))
+	userlib.DatastoreSet(uuidPasswordHash, passwordHash)
+	// store salt in datastore
+	userlib.DatastoreSet(getUUID([]byte(username+"salt")), salt)
+	return &user, nil
+}
+
+func GetUser(username string, password string) (userdataptr *User, err error) {
+	// get user struct from datastore
+	// user struct is encrypted with the user's symmetric key (salted password and the msg "encryption")
+	// check if user exists in keystore
+	_, userExists := userlib.KeystoreGet(username + "publicKey")
+	if !userExists {
+		return nil, errors.New(fmt.Sprintf("The user with username \"%s\" does not exist.", username))
+	}
+	// authenticate the user via the password hash
+	passwordSalted, err := getPasswordSalted(username, password)
+	if err != nil {
+		return nil, err
+	}
+	isAuthenticated, err := authenticateUser(username, passwordSalted)
+	if err != nil {
+		return nil, err
+	}
+	if !isAuthenticated {
+		return nil, errors.New("Error authenticating user: Incorrect password or a malicious action occurred.")
+	}
+	// user is authenticated, now derive AccessToken to access the user struct
+	userUuid := getUUID([]byte(username + "user"))
+	userHmacKey, err := userlib.HashKDF(passwordSalted, []byte("hmac"))
+	userHmacKey = userHmacKey[:16]
+	if err != nil {
+		return nil, err
+	}
+	// derive the symmetric key used to decrypt the user struct
+	userEncryptionKey, err := userlib.HashKDF(passwordSalted, []byte("encryption"))
+	userEncryptionKey = userEncryptionKey[:16]
+	if err != nil {
+		return nil, err
+	}
+	userAccessToken := AccessToken{
+		U:  userUuid,
+		HK: userHmacKey,
+		EK: userEncryptionKey,
+	}
+	// verify and decrypt the user struct
+	userObject, err := getObjectFromDatastore(userAccessToken)
+	if err != nil {
+		return nil, err
+	}
+	var userStruct User
+	err = json.Unmarshal(userObject, &userStruct)
+	if err != nil {
+		return nil, errors.New("Error when converting user object to user struct.")
+	}
+	return &userStruct, nil
+}
+
 func (userdata *User) StoreFile(filename string, content []byte) (err error) {
-	if !userdata.is_file_in_user_filespace(filename) {
-		file := File{
-			Sentinel_uuid: uuid.New(),
-			Owner:         userdata.Username,
-			Editors:       make(map[string]uuid.UUID),
-			Hmac:          userlib.RandomBytes(16),
-			Key:           userlib.RandomBytes(16), // need to first generate this key by the owner
-			Iv:            userlib.RandomBytes(16),
-			Editors_uuid:  uuid.New(),
-			Editors_hmac:  userlib.RandomBytes(16),
-			Editors_key:   userlib.RandomBytes(16),
-			Editors_iv:    userlib.RandomBytes(16),
-		}
-
-		// Generating & Saving file to datastore and relating that file to user
-		file_obj_bytes, err := json.Marshal(file)
-		if err != nil {
-			return errors.New("Error when marshalling")
-		}
-
-		file_meta_uuid := uuid.New()
-		userdata.files[filename] = file_meta_uuid // adding file metadata (file struct) to user's files
-		err_save := save_to_datastore(file_meta_uuid, file_obj_bytes, file.Hmac, file.Key, file.Iv)
-		if err_save != nil {
-			return err_save
-		}
-
-		// Creating & Saving sentinel to datastore
-		file_sentinel := File_sentinel{Head: uuid.New()}
-		file_sentinel_bytes, err := json.Marshal(file_sentinel)
-		if err != nil {
-			return errors.New("Error when marshalling")
-		}
-		err_save = save_to_datastore(file.Sentinel_uuid, file_sentinel_bytes, file.Hmac, file.Key, file.Iv)
-		if err_save != nil {
-			return err_save
-		}
-
-		// Creating & Saving "File Node" to datastore, adding to sentinel head
-		current_node := File_node{Data: content, Next: uuid.Nil}
-		file_n_bytes, err := json.Marshal(current_node)
-		if err != nil {
-			return errors.New("Error when marshalling")
-		}
-		err_save_node := save_to_datastore(file_sentinel.Head, file_n_bytes, file.Hmac, file.Key, file.Iv)
-		if err_save_node != nil {
-			return err_save_node
-		}
-
-		// Update end of sentinel to point to the starting node
-		file_sentinel.End = current_node.Next
-
-		// Finally, creating Editors (only when the file did not exist before) for sharing with the owner as the root
-		root_node := Node{id: userdata.Username, children: nil}
-		editors := Editors{editors_tree: root_node}
-		save_to_datastore(file.Editors_uuid, editors, file.Editors_hmac, file.Editors_key, file.Editors_iv)
-
-		
-
-		return nil
-	}
-
-	// if file exists, overwrite the file
-	file_meta, err := userdata.get_file(filename)
+	// store file metadata at a location deterministic to the symmetric key encryption of the filename
+	// generate access token for file metadata
+	passwordSalted, err := getPasswordSalted(userdata.Username, userdata.Password)
 	if err != nil {
 		return err
 	}
-	sentinel, err := userdata.get_sentinel(filename)
+	fileMetadataUuid := getFileMetadataUuid(passwordSalted, filename)
+	fileMetadataHmacKey, err := getFileMetadataHmacKey(passwordSalted, filename)
 	if err != nil {
 		return err
 	}
-
-	node := File_node{Next: sentinel.Head, Data: content}
-	node_bytes, err_mar := json.Marshal(node)
-	if err_mar != nil {
-		return err_mar
+	fileMetadataEncryptionKey, err := getFileMetadataEncryptionKey(passwordSalted, filename)
+	if err != nil {
+		return err
+	}
+	fileMetadataAccessToken := AccessToken{
+		U:  fileMetadataUuid,
+		HK: fileMetadataHmacKey,
+		EK: fileMetadataEncryptionKey,
 	}
 
-	node_err := save_to_datastore(sentinel.Head, node_bytes, file_meta.Hmac, file_meta.Key, file_meta.Iv)
-	if node_err != nil {
-		return node_err
+	// generate random access token for file header, file sentinel and file blob
+	fileHeaderAccessToken := getRandomAccessToken()
+	sentinelAccessToken := getRandomAccessToken()
+	fileBlobAccessToken := getRandomAccessToken()
+
+	fileBlobStartAccessToken := fileBlobAccessToken
+	fileBlobEndAccessToken := fileBlobAccessToken
+	fileContentAccessToken := getRandomAccessToken()
+
+	// create file metadata
+	fileMetadata := FileMetadata{
+		Owner:         userdata.Username,
+		Header:        fileHeaderAccessToken,
+		SharedHeaders: map[string]AccessToken{},
+	}
+	// create file node
+	fileBlob := FileBlob{
+		HasNext: false,
+		Next:    AccessToken{},
+		Content: fileContentAccessToken,
+	}
+	// create file header
+	fileHeader := FileHeader{
+		SentinelAccess: sentinelAccessToken,
+	}
+	// create file sentinel
+	fileSentinel := FileSentinel{
+		Start: fileBlobStartAccessToken,
+		End:   fileBlobEndAccessToken,
+	}
+	// create file content
+	fileContent := FileContent{
+		Content: content,
 	}
 
-	// update and save sentinel
-
-	sentinel.End = sentinel.Head
-	sentinel_bytes, err_mar := json.Marshal(sentinel)
-	if err_mar != nil {
-		return err_mar
+	// create or overwrite file metadata stored at file ID in datastore
+	err = setObjectToDatastore(fileMetadata, fileMetadataAccessToken)
+	if err != nil {
+		return err
 	}
-	err_saving_sentinel := save_to_datastore(file_meta.Sentinel_uuid, sentinel_bytes, file_meta.Hmac, file_meta.Key, file_meta.Iv)
-	if err_saving_sentinel != nil {
-		return err_saving_sentinel
+	// create or overwrite file header stored at random access token in datastore
+	err = setObjectToDatastore(fileHeader, fileHeaderAccessToken)
+	if err != nil {
+		return err
 	}
-
+	// create or overwrite file sentinel stored at random access token in datastore
+	err = setObjectToDatastore(fileSentinel, sentinelAccessToken)
+	if err != nil {
+		return err
+	}
+	// create or overwrite file sentinel stored at random access token in datastore
+	err = setObjectToDatastore(fileSentinel, sentinelAccessToken)
+	if err != nil {
+		return err
+	}
+	err = setObjectToDatastore(fileBlob, fileBlobAccessToken)
+	if err != nil {
+		return err
+	}
+	err = setObjectToDatastore(fileContent, fileContentAccessToken)
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
 func (userdata *User) AppendToFile(filename string, content []byte) error {
-	file, sentinel, err_get_file := get_sentinel(userdata.master_key, filename)
-	if err_get_file != nil {
-		return err_get_file
+	// construct access token to file metadata
+	passwordSalted, err := getPasswordSalted(userdata.Username, userdata.Password)
+	if err != nil {
+		return err
 	}
 
-	// creating & saving "old end" node
-	old_end := File_node{Next: uuid.New(), Data: content}
-	old_end_bytes, err_old_end := json.Marshal(old_end)
-	if err_old_end != nil {
-		return err_old_end
+	fileMetadataUuid := getFileMetadataUuid(passwordSalted, filename)
+	fileMetadataHmacKey, err := getFileMetadataHmacKey(passwordSalted, filename)
+	if err != nil {
+		return err
+	}
+	fileMetadataEncryptionKey, err := getFileMetadataEncryptionKey(passwordSalted, filename)
+	if err != nil {
+		return err
+	}
+	fileMetadataAccessToken := AccessToken{
+		U:  fileMetadataUuid,
+		HK: fileMetadataHmacKey,
+		EK: fileMetadataEncryptionKey,
+	}
+	fileMetadata, err := getObjectFromDatastore(fileMetadataAccessToken)
+	if err != nil {
+		return err
+	}
+	var fileMetadataStruct FileMetadata
+	err = json.Unmarshal(fileMetadata, &fileMetadataStruct)
+	if err != nil {
+		return errors.New("Error when converting file metadata object to file metadata struct.")
+	}
+	// get file header
+	fileHeaderAccessToken := fileMetadataStruct.Header
+	fileHeader, err := getObjectFromDatastore(fileHeaderAccessToken)
+	if err != nil {
+		return err
+	}
+	var fileHeaderStruct FileHeader
+	err = json.Unmarshal(fileHeader, &fileHeaderStruct)
+	if err != nil {
+		return errors.New("Error when converting file header object to file header struct.")
+	}
+	// get file sentinel
+	fileSentinelAccessToken := fileHeaderStruct.SentinelAccess
+	fileSentinel, err := getObjectFromDatastore(fileSentinelAccessToken)
+	if err != nil {
+		return err
+	}
+	var fileSentinelStruct FileSentinel
+	err = json.Unmarshal(fileSentinel, &fileSentinelStruct)
+	if err != nil {
+		return errors.New("Error when converting file sentinel object to file sentinel struct.")
+	}
+	// get end file blob
+	endFileBlobAccessToken := fileSentinelStruct.End
+	endFileBlob, err := getObjectFromDatastore(endFileBlobAccessToken)
+	if err != nil {
+		return err
+	}
+	var endFileBlobStruct FileBlob
+	err = json.Unmarshal(endFileBlob, &endFileBlobStruct)
+	if err != nil {
+		return errors.New("Error when converting file blob object to file blob struct.")
 	}
 
-	err_saving_end_node := save_to_datastore(sentinel.End, old_end_bytes, file.Hmac, file.Key, file.Iv)
-	if err_saving_end_node != nil {
-		return err_saving_end_node
+	// CREATING FILE DATA
+	// generate random access token for new file blob and new file content
+	newFileContentAccessToken := getRandomAccessToken()
+	newFileBlobAccessToken := getRandomAccessToken()
+	// create a new file blob and new file content
+	newFileBlob := FileBlob{
+		HasNext: false,
+		Next:    AccessToken{},
+		Content: newFileContentAccessToken,
+	}
+	newFileContent := FileContent{
+		Content: content,
 	}
 
-	// creating & saving "new end" node
-	new_end := File_node{Next: uuid.Nil, Data: []byte{}}
-	new_end_bytes, err_new_end := json.Marshal(new_end)
-	if err_new_end != nil {
-		return err_new_end
+	// mark the previous end file blob to point to the new file blob
+	endFileBlobStruct.Next = newFileBlobAccessToken
+	// mark the previous end file blob as not the end
+	endFileBlobStruct.HasNext = true
+
+	// save the updated old file blob to the linked list
+	err = setObjectToDatastore(endFileBlobStruct, endFileBlobAccessToken)
+	if err != nil {
+		return err
 	}
 
-	err_saving_new_end := save_to_datastore(old_end.Next, new_end_bytes, file.Hmac, file.Key, file.Iv)
-	if err_saving_new_end != nil {
-		return err_saving_new_end
+	// save the new file blob to the linked list
+	err = setObjectToDatastore(newFileBlob, newFileBlobAccessToken)
+	if err != nil {
+		return err
+	}
+
+	// save the new file content to the linked list
+	err = setObjectToDatastore(newFileContent, newFileContentAccessToken)
+	if err != nil {
+		return err
+	}
+
+	// mark the sentinel end to point to the new file blob
+	// save the updated sentinel
+	fileSentinelStruct.End = newFileBlobAccessToken
+	err = setObjectToDatastore(fileSentinelStruct, fileSentinelAccessToken)
+	if err != nil {
+		return err
+	}
+
+	// TRASH CODE
+	// go to the end of the linked list and set the linked list has next to false
+	// get the end file blob
+	endFileBlobAccessToken = fileSentinelStruct.End
+	endFileBlob, err = getObjectFromDatastore(endFileBlobAccessToken)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(endFileBlob, &endFileBlobStruct)
+	if err != nil {
+		return errors.New("Error when converting file blob object to file blob struct.")
+	}
+	endFileBlobStruct.HasNext = false
+	// save the updated file blob
+	err = setObjectToDatastore(endFileBlobStruct, endFileBlobAccessToken)
+	if err != nil {
+		return err
+	}
+
+	// get the end file content
+	endFileContentAccessToken := endFileBlobStruct.Content
+	endFileContent, err := getObjectFromDatastore(endFileContentAccessToken)
+	if err != nil {
+		return err
+	}
+	var endFileContentStruct FileContent
+	err = json.Unmarshal(endFileContent, &endFileContentStruct)
+	if err != nil {
+		return errors.New("Error when converting file content object to file content struct.")
 	}
 
 	return nil
 }
 
 func (userdata *User) LoadFile(filename string) (content []byte, err error) {
-	var file_bytes []byte
-	// file = fileAccess & headOFfile = sentinel
-	file, sentinel, err_get_file := get_sentinel(userdata.master_key, filename)
-	if err_get_file != nil {
-		return nil, err_get_file
+	// construct access token to file metadata
+	passwordSalted, err := getPasswordSalted(userdata.Username, userdata.Password)
+	if err != nil {
+		return nil, err
+	}
+	fileMetadataUuid := getFileMetadataUuid(passwordSalted, filename)
+	fileMetadataHmacKey, err := getFileMetadataHmacKey(passwordSalted, filename)
+	if err != nil {
+		return nil, err
+	}
+	fileMetadataEncryptionKey, err := getFileMetadataEncryptionKey(passwordSalted, filename)
+	if err != nil {
+		return nil, err
+	}
+	fileMetadataAccessToken := AccessToken{
+		U:  fileMetadataUuid,
+		HK: fileMetadataHmacKey,
+		EK: fileMetadataEncryptionKey,
+	}
+	fileMetadata, err := getObjectFromDatastore(fileMetadataAccessToken)
+	if err != nil {
+		return nil, err
+	}
+	var fileMetadataStruct FileMetadata
+	err = json.Unmarshal(fileMetadata, &fileMetadataStruct)
+	if err != nil {
+		return nil, errors.New("Error when converting file metadata object to file metadata struct.")
 	}
 
-	// getting "current node" from data store & unmarshalling it
-	var curr_node File_node
-	curr_node_bytes, err_curr_node_bytes := get_from_datastore(sentinel.Head, file.Hmac, file.Key)
-	if err_curr_node_bytes != nil {
-		return nil, err_curr_node_bytes
+	// get file header
+	fileHeaderAccessToken := fileMetadataStruct.Header
+	fileHeader, err := getObjectFromDatastore(fileHeaderAccessToken)
+	if err != nil {
+		return nil, err
 	}
-	err_unmarshal_curr_node := json.Unmarshal(curr_node_bytes, curr_node)
-	if err_unmarshal_curr_node != nil {
-		return nil, err_unmarshal_curr_node
+	var fileHeaderStruct FileHeader
+	err = json.Unmarshal(fileHeader, &fileHeaderStruct)
+	if err != nil {
+		return nil, errors.New("Error when converting file header object to file header struct.")
 	}
 
-	file_bytes = append(file_bytes, curr_node.Data...)
+	// get file sentinel
+	fileSentinelAccessToken := fileHeaderStruct.SentinelAccess
+	fileSentinel, err := getObjectFromDatastore(fileSentinelAccessToken)
+	if err != nil {
+		return nil, err
+	}
+	var fileSentinelStruct FileSentinel
+	err = json.Unmarshal(fileSentinel, &fileSentinelStruct)
+	if err != nil {
+		return nil, errors.New("Error when converting file sentinel object to file sentinel struct.")
+	}
 
-	// file traversal
-	for curr_node.Next != uuid.Nil {
-		curr_node_bytes, traverse_err := get_from_datastore(curr_node.Next, file.Hmac, file.Key) // both sentinel and the linked list blobs are encrypted with the file keys
-		if traverse_err != nil {
-			return nil, traverse_err
+	// ITERATE AND LINKED LIST TO GET FILE CONTENT
+	// get first file blob
+	fileBlobAccessToken := fileSentinelStruct.Start
+	fileBlob, err := getObjectFromDatastore(fileBlobAccessToken)
+	if err != nil {
+		return nil, err
+	}
+	var fileBlobStruct FileBlob
+	err = json.Unmarshal(fileBlob, &fileBlobStruct)
+	if err != nil {
+		return nil, errors.New("Error when converting file blob object to file blob struct.")
+	}
+	fileContentLoaded := []byte{}
+	// concatenate file blob contents while iterating through the linked list of file blobs
+	for fileBlobStruct.HasNext {
+		fileContent, err := getObjectFromDatastore(fileBlobStruct.Content)
+		if err != nil {
+			return nil, err
 		}
-
-		err_mar := json.Unmarshal(curr_node_bytes, curr_node)
-		if err_mar != nil {
-			return nil, err_mar
+		var fileContentStruct FileContent
+		err = json.Unmarshal(fileContent, &fileContentStruct)
+		if err != nil {
+			return nil, errors.New("Error when converting file content object to file content struct.")
 		}
+		fileContentLoaded = append(fileContentLoaded, fileContentStruct.Content...)
 
-		file_bytes = append(file_bytes, curr_node.Data...)
+		// get next file blob
+		fileBlob, err = getObjectFromDatastore(fileBlobStruct.Next)
+		if err != nil {
+			return nil, err
+		}
+		err = json.Unmarshal(fileBlob, &fileBlobStruct)
+		if err != nil {
+			return nil, errors.New("Error when converting file blob object to file blob struct.")
+		}
 	}
+	// concatenate the last file blob content
+	fileContent, err := getObjectFromDatastore(fileBlobStruct.Content)
+	if err != nil {
+		return nil, err
+	}
+	var fileContentStruct FileContent
+	err = json.Unmarshal(fileContent, &fileContentStruct)
+	if err != nil {
+		return nil, errors.New("Error when converting file content object to file content struct.")
+	}
+	fileContentLoaded = append(fileContentLoaded, fileContentStruct.Content...)
 
-	return file_bytes, nil
+	return fileContentLoaded, nil
 }
 
-// TODO among other things, encrypt the invitation with the recipient's public key
 func (userdata *User) CreateInvitation(filename string, recipientUsername string) (invitationPtr uuid.UUID, err error) {
-	// hash_editor = recipientUsername
-	// hash_editor := hex.EncodeToString(userlib.Hash([]byte(recipientUsername)))
+	// first case, if we are owner, we create a new encrypted file header,
+	// add it to the shared headers of the owner struct, create the invitation containing the access token to this new encrypted file header
+	// second case, if we are not owner, we go to our file metadata, get the file header access token and put it in a new shared struct
+	// in both cases, we hash the share struct at a location deterministic to the sender username, send the encryption and mac key
+	// fill in the owner field with the owner so that the recipient can verify the invitation came from the owner (and subsequent sharers can verify this is the case)
 
-	file, sentinel, err_get_file := get_sentinel(userdata.master_key, filename)
-	if err_get_file != nil {
-		return uuid.Nil, err_get_file
+	// lookup if recipient exists
+	recipientPublicKey, ok := userlib.KeystoreGet(recipientUsername + "publicKey")
+	if !ok {
+		return uuid.Nil, errors.New("Recipient does not exist.")
 	}
 
-	if userdata.Username == file.Owner { // is the sender is the owner
-
-		invite_address, err_invite := userlib.HashKDF(userdata.master_key, []byte(recipientUsername+filename))
-		if err_invite != nil {
-			return uuid.Nil, err_invite
-		}
-		invite_uuid, err_uuid := uuid.FromBytes(invite_address[:16])
-		if err_uuid != nil {
-			return uuid.Nil, err_uuid
-		}
-
-		// (1) Creating Cyphertext
-		plain_txt := userdata.files[filename] // file location
-		mar_plain_txt, mar_err := json.Marshal(plain_txt)
-		if mar_err != nil {
-			return uuid.Nil, mar_err
-		}
-		cyphertxt, err_cyp := userlib.PKEEnc(userdata.public_key, mar_plain_txt)
-		if err_cyp != nil {
-			return uuid.Nil, err_cyp
-		}
-		// (2) Creating Signature
-		signature, err_sig := userlib.DSSign(userdata.private_key, cyphertxt)
-		if err_sig != nil {
-			return uuid.Nil, err_sig
-		}
-		// (3) Creating Invitation
-		invitation := Invite{Cypher_data_location: cyphertxt, Signature_verify: signature}
-		invitation_bytes, err_marshalling := json.Marshal(invitation)
-		if err_marshalling != nil {
-			return uuid.Nil, err_marshalling
-		}
-		// (4) Saving Invitation
-		err_saving := save_to_datastore(invite_uuid, invitation_bytes, file.Hmac, file.Key, file.Iv)
-		if err_saving != nil {
-			return uuid.Nil, err_saving
-		}
-
-		// (5) Adding "Editor" to "Editors  Map"
-		file.Editors[recipientUsername] = invite_uuid
-
-		// (6) Saving File
-		file_bytes, err_marshalling_file := json.Marshal(file)
-		if err_marshalling_file != nil {
-			return uuid.Nil, err_marshalling_file
-		}
-
-		err_saving_file := save_to_datastore(sentinel.Head, file_bytes, file.Hmac, file.Key, file.Iv)
-		if err_saving_file != nil {
-			return uuid.Nil, err_saving_file
-		}
-		return invite_uuid, nil
-	} else { // If the sender is not the owner
-		// (1) Creating Cyphertext
-		plain_txt := userdata.invites_map[filename] // file location
-		mar_plain_txt, mar_err := json.Marshal(plain_txt)
-		if mar_err != nil {
-			return uuid.Nil, mar_err
-		}
-		cyphertxt, err_cyp := userlib.PKEEnc(userdata.public_key, mar_plain_txt)
-		if err_cyp != nil {
-			return uuid.Nil, err_cyp
-		}
-
-		// (2) Creating Signature
-		signature, err_sig := userlib.DSSign(userdata.private_key, cyphertxt)
-		if err_sig != nil {
-			return uuid.Nil, err_sig
-		}
-
-		// (3) Creating Invitation
-		invitation := Invite{File: filename, Owner: userdata.Username, Cypher_data_location: cyphertxt, Signature_verify: signature}
-		invitation_bytes, err_marshalling := json.Marshal(invitation)
-		if err_marshalling != nil {
-			return uuid.Nil, err_marshalling
-		}
-
-		// (4) Saving Invitation
-		err_saving := save_to_datastore(userdata.invites_map[filename], invitation_bytes, file.Hmac, file.Key, file.Iv)
-		if err_saving != nil {
-			return uuid.Nil, err_saving
-		}
-
-		// (5) Adding "Editor" to "Editors  Map"
-		file.Editors[recipientUsername] = userdata.invites_map[filename]
-
-		// (6) Saving File
-		file_bytes, err_marshalling_file := json.Marshal(file)
-		if err_marshalling_file != nil {
-			return uuid.Nil, err_marshalling_file
-		}
-
-		return userdata.invites_map[filename], save_to_datastore(sentinel.Head, file_bytes, file.Hmac, file.Key, file.Iv)
+	// get the file metadata access token
+	passwordSalted, err := getPasswordSalted(userdata.Username, userdata.Password)
+	if err != nil {
+		return uuid.Nil, err
 	}
-	// the user does not have access to the file nor is the owner
-	return uuid.Nil, errors.New("User does not have access to file nor is the owner")
+	fileMetadataUuid := getFileMetadataUuid(passwordSalted, filename)
+	fileMetadataHmacKey, err := getFileMetadataHmacKey(passwordSalted, filename)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	fileMetadataEncryptionKey, err := getFileMetadataEncryptionKey(passwordSalted, filename)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	fileMetadataAccessToken := AccessToken{
+		U:  fileMetadataUuid,
+		HK: fileMetadataHmacKey,
+		EK: fileMetadataEncryptionKey,
+	}
+	fileMetadata, err := getObjectFromDatastore(fileMetadataAccessToken)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	var fileMetadataStruct FileMetadata
+	err = json.Unmarshal(fileMetadata, &fileMetadataStruct)
+	if err != nil {
+		return uuid.Nil, errors.New("Error when converting file metadata object to file metadata struct.")
+	}
+	// get the file header access token
+	fileHeaderAccessToken := fileMetadataStruct.Header
+	fileHeader, err := getObjectFromDatastore(fileHeaderAccessToken)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	var fileHeaderStruct FileHeader
+	err = json.Unmarshal(fileHeader, &fileHeaderStruct)
+	if err != nil {
+		return uuid.Nil, errors.New("Error when converting file header object to file header struct.")
+	}
+
+	// get the file sentinel access token
+	fileSentinelAccessToken := fileHeaderStruct.SentinelAccess
+
+	// first case (we are the owner), make a new file header and the recipient to the shared headers
+	if userdata.Username == fileMetadataStruct.Owner {
+		// create a new file header
+		newFileHeader := FileHeader{
+			SentinelAccess: fileSentinelAccessToken,
+		}
+		fileHeaderAccessToken = getRandomAccessToken()
+		err = setObjectToDatastore(newFileHeader, fileHeaderAccessToken)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		// update the shared headers of the file metadata with the new file header access token
+		// important because we can revoke invitations using this shared header (since the sharing invitation is stored at a determinstic location with respect to the recipient's username and the filename of the shared file)
+		fileMetadataStruct.SharedHeaders[recipientUsername] = fileHeaderAccessToken
+		// save the updated file metadata struct
+		fileMetadataStructMarshalled, err := json.Marshal(fileMetadataStruct)
+		if err != nil {
+			return uuid.Nil, errors.New("Error when converting file metadata struct to file metadata bytes.")
+		}
+		err = setObjectToDatastore(fileMetadataStructMarshalled, fileMetadataAccessToken)
+	}
+	// if sender is not owner, do not do anything (we get the shared header from the file metadata struct, and share that instead in the share struct)
+
+	// COMMON STEPS
+	senderUsername := userdata.Username
+	shareStructUuid := getUUID([]byte(senderUsername + recipientUsername + "share"))
+	shareAccessToken := AccessToken{
+		U:  shareStructUuid,
+		HK: userlib.RandomBytes(16),
+		EK: userlib.RandomBytes(16),
+	}
+	// create a new shared struct
+	shareStruct := Share{
+		Owner:      fileMetadataStruct.Owner,
+		Recipient:  recipientUsername,
+		FileHeader: fileHeaderAccessToken,
+	}
+	//  save the share struct to datastore
+	err = setObjectToDatastore(shareStruct, shareAccessToken)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	// SAVE THE SHARE ACCESS TOKEN TO DATASTORE
+	// Note: share struct is too large to sign with public key encryption, so we sign the share access token instead to share the keys
+	// create the share access token
+	// clear the uuid field to save bytes
+	shareAccessToken.U = uuid.Nil
+	// marshall the share access token
+	shareAccessTokenMarshalled, err := json.Marshal(shareAccessToken)
+	if err != nil {
+		return uuid.Nil, errors.New("Error when converting share struct to share bytes.")
+	}
+
+	// encrypt the share access token with the public key of the recipient
+	shareStructEncrypted, err := userlib.PKEEnc(recipientPublicKey, shareAccessTokenMarshalled)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	// sign the encrypted share access token with the private key of the sender
+	signatureShare, err := userlib.DSSign(userdata.SignKey, shareStructEncrypted)
+	if err != nil {
+		return uuid.Nil, err
+	}
+
+	// put the encrypted share access token into a container
+	shareAccessTokenContainer := Container{
+		O: shareStructEncrypted,
+		H: signatureShare,
+	}
+	// marshall the container
+	shareAccessTokenContainerMarshalled, err := json.Marshal(shareAccessTokenContainer)
+	if err != nil {
+		return uuid.Nil, errors.New("Error when converting share access token container to share access token container bytes.")
+	}
+	shareUuid := uuid.New()
+	userlib.DatastoreSet(shareUuid, shareAccessTokenContainerMarshalled)
+	return shareUuid, nil
 }
 
-// TODO
 func (userdata *User) AcceptInvitation(senderUsername string, invitationPtr uuid.UUID, filename string) error {
-
-	// The caller already has a file with the given filename in their personal file namespace
-	_, ok := userdata.files[filename]
-	if !ok {
-		return errors.New("The caller already has a file with the given filename in their personal file namespace")
-	}
-
-	// check invitation is no longer valid due to revocation.
-	_, ok = userdata.invites_map[filename]
-	if !ok {
-		return errors.New("check invitation is no longer valid due to revocation")
-	}
-
-	// Does senderUsername exist? Checking this via getting the public key of the sender
-	public_key, pk_exist := userlib.KeystoreGet(senderUsername + "public-key")
-	if !pk_exist {
-		return errors.New("Cannot get the public key of senderUsername")
-	}
-
-	// Getting the signature from the sender
-	signature, sign_exist := userlib.KeystoreGet(senderUsername + "key-verify")
-	if !sign_exist {
-		return errors.New("Cannot get the digitial signature of the sender")
-	}
-
-	// (1.3) Getting the cyphertext from invitationPtr
-	cypher_text, ok := userlib.DatastoreGet(invitationPtr)
-	if !ok {
-		return errors.New("Cannot get invitation from Datastore")
-	}
-
-	// (1.4) Verify the signature
-	valid_signature := userlib.DSVerify(public_key, cypher_text, signature.PubKey.N.Bytes())
-	if valid_signature != nil {
-		return errors.New("Cannot verify the sender is the real sender of the invitation")
-	}
-	// (2) Decrypt the cypher text to get file location
-	invite_container, err := userlib.PKEDec(userdata.private_key, cypher_text)
+	// check if the filename exists in the recipients filespace
+	passwordSalted, err := getPasswordSalted(userdata.Username, userdata.Password)
 	if err != nil {
-		return nil
+		return errors.New("Error when getting password salted.")
+	}
+	// START CHECK IF FILE EXISTS IN THE FILESPACE //////////////////////////////////////////////////////////////////
+	fileMetadataUuid := getFileMetadataUuid(passwordSalted, filename)
+	// get the file metadata struct using the uuid
+	fileHmacKey, err := getFileMetadataHmacKey(passwordSalted, filename)
+	// if err != nil {
+	// 	return errors.New("ACCEPT INVITATION (FILE EXISTS CHECK): Error when getting file metadata hmac key.")
+	// }
+	fileEncryptionKey, err := getFileMetadataEncryptionKey(passwordSalted, filename)
+	// if err != nil {
+	// 	return errors.New("ACCEPT INVITATION (FILE EXISTS CHECK): Error when getting file metadata encryption key.")
+	// }
+	fileMetadataAccessToken := AccessToken{
+		U:  fileMetadataUuid,
+		HK: fileHmacKey,
+		EK: fileEncryptionKey,
+	}
+	fileMetadata, err := getObjectFromDatastore(fileMetadataAccessToken)
+	// if err != nil {
+	// 	userlib.DebugMsg("ACCEPT INVITATION (FILE EXISTS CHECK): Failed to get filemetadata from datastore.")
+	// }
+	var fileMetadataStruct FileMetadata
+	err = json.Unmarshal(fileMetadata, &fileMetadataStruct)
+	// if err != nil {
+	// 	userlib.DebugMsg("ACCEPT INVITATION (FILE EXISTS CHECK): Error when converting file metadata object to file metadata struct.")
+	// }
+	// get the file header access token from the shared headers of the file metadata struct
+	fileHeaderAccessToken := fileMetadataStruct.SharedHeaders[userdata.Username]
+	// get the file header struct using the file header access token
+	fileHeader, err := getObjectFromDatastore(fileHeaderAccessToken)
+	// if err != nil {
+	// 	userlib.DebugMsg("ACCEPT INVITATION (FILE EXISTS CHECK): Error when getting file header struct.")
+	// }
+	var fileHeaderStruct FileHeader
+	err = json.Unmarshal(fileHeader, &fileHeaderStruct)
+	// if err != nil {
+	// 	userlib.DebugMsg("ACCEPT INVITATION (FILE EXISTS CHECK): Error unmarshalling fileheader.")
+	// }
+	// get file sentinel (which will determine if this file was revoked or not from the recipient)
+	fileSentinelAccessToken := fileHeaderStruct.SentinelAccess
+	// get the file sentinel struct
+	fileSentinel, err := getObjectFromDatastore(fileSentinelAccessToken)
+	// if err != nil {
+	// 	userlib.DebugMsg("ACCEPT INVITATION (FILE EXISTS CHECK): Fail to get file sentinel from datastore.")
+	// }
+
+	// KILLER DEATHKNELL FOR THE FILE EXISTING IN FILESPACE CHECK
+	// we delete the filesentinel struct when we revoke access so if it is still there, then the file still is in the filespace of the recipient
+	var fileSentinelStruct FileSentinel
+	err = json.Unmarshal(fileSentinel, &fileSentinelStruct)
+	if err == nil {
+		return errors.New("ERROR: ACCEPT INVITATION (FILE EXISTS CHECK): File exists in the filespace of the recipient.")
+	} else {
+		userlib.DebugMsg("PASS: ACCEPT INVITATION (FILE EXISTS CHECK): File DOES NOT exist in the filespace of the recipient.")
 	}
 
-	// (3) Unmarshal the invite
-	var invitation Invite
-	err = json.Unmarshal(invite_container, &invitation)
+	// END CHECK IF FILE EXISTS IN THE FILESPACE //////////////////////////////////////////////////////////////////
+
+	// SENT TOKEN RETRIEVAL
+	// get the the sent access token
+	shareAccessContainer, ok := userlib.DatastoreGet(invitationPtr)
+	if !ok {
+		return errors.New("Invitation does not exist.")
+	}
+	var shareAccessContainerStruct Container
+	err = json.Unmarshal(shareAccessContainer, &shareAccessContainerStruct)
 	if err != nil {
-		return errors.New("Cannot numarshal the invitation")
+		return errors.New("Error when converting sent access token container bytes to sent access token container struct.")
+	}
+	// verify the container access token
+	senderVerifyKey, ok := userlib.KeystoreGet(senderUsername + "verifyKey")
+	if !ok {
+		return errors.New("Sender does not exist.")
+	}
+	err = userlib.DSVerify(senderVerifyKey, shareAccessContainerStruct.O, shareAccessContainerStruct.H)
+	if err != nil {
+		return errors.New("Unable to verify sent access token.")
+	}
+	// use private key to decrypt the sent access token
+	shareAccessDecrypted, err := userlib.PKEDec(userdata.PrivateKey, shareAccessContainerStruct.O)
+	if err != nil {
+		return errors.New("Unable to decrypt sent access token.")
+	}
+	// unmarshall the sent access token
+	var shareAccessTokenStruct AccessToken
+	err = json.Unmarshal(shareAccessDecrypted, &shareAccessTokenStruct)
+	if err != nil {
+		return errors.New("Error when converting sent access token bytes to sent access token struct.")
 	}
 
-	// (4) Verify that the invitation is for the correct file
-	if invitation.File != filename {
-		return errors.New("The invitation is not for the correct file")
+	// ACCESSING SHARE STRUCT
+	// generate the access token to access the share struct
+	recipientUsername := userdata.Username
+	shareStructUuid := getUUID([]byte(senderUsername + recipientUsername + "share")) // get deterministic user id
+	shareStructAccessToken := AccessToken{
+		U:  shareStructUuid,
+		HK: shareAccessTokenStruct.HK,
+		EK: shareAccessTokenStruct.EK,
+	}
+	// get the share struct using the share access token
+	share, err := getObjectFromDatastore(shareStructAccessToken)
+	if err != nil {
+		return errors.New("Unable to get the share struct from datastore.")
+	}
+	var shareStruct Share
+	err = json.Unmarshal(share, &shareStruct)
+	if err != nil {
+		return errors.New("Error when converting share bytes to share struct.")
 	}
 
-	// (6) Get the file location
-	file_location := invitation.File_uuid
-
-	// (7) Unmarshal file_location to get uuid.UUID
-	var file_uuid uuid.UUID
-	err_marshalling := json.Unmarshal(file_location, &file_uuid)
-	if err_marshalling != nil {
-		return nil
+	// ERROR CHECK: verify that the share points to an actual file (to check if the share has been revoked or not)
+	// get the file header access token
+	// Assumption: the file sentinel is moved to another location
+	fileHeader = []byte{} // clear
+	fileHeader, err = getObjectFromDatastore(shareStruct.FileHeader)
+	if err != nil {
+		return errors.New("INVITATION REVOCATION CHECK: Error when getting file header from datastore.")
+	}
+	fileHeaderStruct = FileHeader{} // clear
+	err = json.Unmarshal(fileHeader, &fileHeaderStruct)
+	if err != nil {
+		return errors.New("INVITATION REVOCATION CHECK: Error when converting file header bytes to file header struct.")
+	}
+	fileSentinel = []byte{} // clear
+	fileSentinel, err = getObjectFromDatastore(fileHeaderStruct.SentinelAccess)
+	if err != nil {
+		return errors.New("INVITATION REVOCATION CHECK: Error when getting file sentinel from datastore.")
+	}
+	fileSentinelStruct = FileSentinel{} // clear
+	err = json.Unmarshal(fileSentinel, &fileSentinelStruct)
+	if err != nil {
+		return errors.New("INVITATION REVOCATION CHECK: Error when converting file sentinel bytes to file sentinel struct.")
 	}
 
-	// (8) Add "invite"	 to "invites_map"
-	userdata.invites_map[filename] = file_uuid
-
-	// add ourselves to the Editors list
-
-	// get the editors list from the invite struct
+	// ADD FILE TO RECIPIENT'S FILESPACE
+	// since invitation is valid at this time, add this file to the user's filespace
+	// create new file metadata struct that points to the file header
+	newFileMetadataUuid := getFileMetadataUuid(passwordSalted, filename)
+	newFileHmac, err := getFileMetadataHmacKey(passwordSalted, filename)
+	if err != nil {
+		return errors.New("Error when getting file metadata hmac key.")
+	}
+	newFileEncryption, err := getFileMetadataEncryptionKey(passwordSalted, filename)
+	if err != nil {
+		return errors.New("Error when getting file metadata encryption key.")
+	}
+	newFileMetadataAccessToken := AccessToken{
+		U:  newFileMetadataUuid,
+		HK: newFileHmac,
+		EK: newFileEncryption,
+	}
+	// create file metadata
+	newFileMetadata := FileMetadata{
+		Owner:         shareStruct.Owner,
+		Header:        shareStruct.FileHeader,
+		SharedHeaders: map[string]AccessToken{},
+	}
+	// save the new file metadata struct
+	setObjectToDatastore(newFileMetadata, newFileMetadataAccessToken)
 
 	return nil
 }
 
-// TODO
 func (userdata *User) RevokeAccess(filename string, recipientUsername string) error {
+	// only the owner could revoke access
+	// move the file sentinel and the file blobs and the file contents to new locations -- this way, any existing sharing invitations would not be valid
+	// delete the file sentinel of the old location
+	// then remove the user who has had their access revoked, and update all the shared headers with the file sentinel access token
 
-	// (1) Get the file location from the user's file map
-	file_location, ok := userdata.files[filename]
+	// check if recipient user exists
+	_, ok := userlib.KeystoreGet(recipientUsername + "verifyKey")
 	if !ok {
-		return errors.New("The caller already has a file with the given filename in their personal file namespace")
-	}
-	// (2) Get the file from the file location
-	file_bytes, err := userlib.DatastoreGet(file_location)
-	if !err {
-		return nil
-	}
-	// (3) Unmarshal the file
-	var file File
-	err_mar := json.Unmarshal(file_bytes, &file)
-	if err_mar != nil {
-		return err_mar
-	}
-	// (4) Check if the user is the owner
-	if file.Owner != userdata.Username {
-		return errors.New("The user is not the owner")
+		return errors.New("Recipient user does not exist.")
 	}
 
-	// (6) Move the file to a different location in datastore
-	new_file_location := uuid.New()
-	userlib.DatastoreSet(new_file_location, file_bytes)
+	// check if the filename exists in the filespace of the caller
+	passwordSalted, err := getPasswordSalted(userdata.Username, userdata.Password)
+	if err != nil {
+		return errors.New("Error when getting password salted.")
+	}
+	fileMetadataUuid := getFileMetadataUuid(passwordSalted, filename)
+	// get the file metadata access token
+	fileMetadataHmac, err := getFileMetadataHmacKey(passwordSalted, filename)
+	if err != nil {
+		return errors.New("Error when getting file metadata hmac key.")
+	}
+	fileMetadataEncryption, err := getFileMetadataEncryptionKey(passwordSalted, filename)
+	if err != nil {
+		return errors.New("Error when getting file metadata encryption key.")
+	}
+	fileMetadataAccessToken := AccessToken{
+		U:  fileMetadataUuid,
+		HK: fileMetadataHmac,
+		EK: fileMetadataEncryption,
+	}
+	// get the file metadata
+	fileMetadata, err := getObjectFromDatastore(fileMetadataAccessToken)
+	if err != nil {
+		return errors.New("Error when getting file metadata from datastore.")
+	}
+	var fileMetadataStruct FileMetadata
+	err = json.Unmarshal(fileMetadata, &fileMetadataStruct)
+	if err != nil {
+		return errors.New("Error when converting file metadata bytes to file metadata struct.")
+	}
+	// check if the recipient is in the shared headers
+	_, ok = fileMetadataStruct.SharedHeaders[recipientUsername]
+	if !ok {
+		return errors.New("Recipient does not have access to the file.")
+	}
+	// get the file header access token
+	fileHeader, err := getObjectFromDatastore(fileMetadataStruct.Header)
+	if err != nil {
+		return errors.New("Error when getting file header from datastore.")
+	}
+	var fileHeaderStruct FileHeader
+	err = json.Unmarshal(fileHeader, &fileHeaderStruct)
+	if err != nil {
+		return errors.New("Error when converting file header bytes to file header struct.")
+	}
+	// get the file sentinel access token
+	fileSentinel, err := getObjectFromDatastore(fileHeaderStruct.SentinelAccess)
+	if err != nil {
+		return errors.New("Error when getting file sentinel from datastore.")
+	}
+	var fileSentinelStruct FileSentinel
+	err = json.Unmarshal(fileSentinel, &fileSentinelStruct)
+	if err != nil {
+		return errors.New("Error when converting file sentinel bytes to file sentinel struct.")
+	}
 
-	// TODO: rehash the file with a new key
+	// МОVE FILE BLOBS
 
-	// (7) Update the file location in the user's file map
-	userdata.files[filename] = new_file_location
+	// Update the file sentinel start
+	// get the start of the sentinel
+	fileBlobStartAccessToken := fileSentinelStruct.Start
+	// get the start file blob
+	fileBlobStart, err := getObjectFromDatastore(fileBlobStartAccessToken)
+	if err != nil {
+		return errors.New("Error when getting file blob start from datastore.")
+	}
+	var fileBlobStartStruct FileBlob
+	err = json.Unmarshal(fileBlobStart, &fileBlobStartStruct)
+	if err != nil {
+		return errors.New("Error when converting file blob start bytes to file blob start struct.")
+	}
+	// move start file blob to a new location
+	newFileBlobStartAccessToken := getRandomAccessToken()
+	err = setObjectToDatastore(fileBlobStartStruct, newFileBlobStartAccessToken)
+	if err != nil {
+		return errors.New("Error when setting file blob start to datastore.")
+	}
+	// update the filesentinel start to point to a new location
+	fileSentinelStruct.Start = newFileBlobStartAccessToken
 
-	// TODO (8) Update the file's Editor map with new location for every user except the recipient
-	for user, _ := range file.Editors {
-		if user != recipientUsername {
-			file.Editors[user] = new_file_location
+	// loop the file blobs after the start if they exist
+	var currFileBlobAccessToken AccessToken
+	var currFileBlobMarshalled []byte
+	var currFileBlobStruct FileBlob
+	if fileBlobStartStruct.HasNext { // if we have more blobs after the start struct in the file sentinel
+		currFileBlobAccessToken = fileBlobStartStruct.Next
+		// get the currFileBlobStruct
+		currFileBlobMarshalled, err = getObjectFromDatastore(currFileBlobAccessToken)
+		if err != nil {
+			return errors.New("Error when getting curr file blob from datastore.")
+		}
+		err = json.Unmarshal(currFileBlobMarshalled, &currFileBlobStruct)
+		if err != nil {
+			return errors.New("Error when converting curr file blob bytes to curr file blob struct.")
+		}
+		// *s > *s > *s
+		// start > a > b > c
+		for currFileBlobStruct.HasNext {
+			// get the next file blob struct
+			nextFileBlob, err := getObjectFromDatastore(currFileBlobStruct.Next)
+			if err != nil {
+				return errors.New("Error when getting next file blob from datastore.")
+			}
+			var nextFileBlobStruct FileBlob
+			err = json.Unmarshal(nextFileBlob, &nextFileBlobStruct)
+			if err != nil {
+				return errors.New("Error when converting next file blob bytes to next file blob struct.")
+			}
+			// we first move the next file blob to a new location
+			newNextFileBlobAccessToken := getRandomAccessToken()
+			err = setObjectToDatastore(nextFileBlobStruct, newNextFileBlobAccessToken)
+			if err != nil {
+				return errors.New("Error when setting next file blob to datastore.")
+			}
+			// update the curr file blob to point to the new location
+			currFileBlobStruct.Next = newNextFileBlobAccessToken
+			// save the curr file blob struct to the new location
+			newCurrFileBlobAccessToken := getRandomAccessToken()
+			// save the curr file blob struct
+			err = setObjectToDatastore(currFileBlobStruct, newCurrFileBlobAccessToken)
+			if err != nil {
+				return errors.New("Error when setting curr file blob to datastore.")
+			}
+
+			// update next: set the currFileBlobStruct to the next file blob struc
+			currFileBlobStruct = nextFileBlobStruct
 		}
 	}
-	// (9) Remove recipient from file's Editor map
-	delete(file.Editors, recipientUsername)
+
+	// lastly, update the file sentinel to point to the last file blob
+	fileSentinelStruct.End = currFileBlobAccessToken
+
+	// save the file sentinel to a new location
+	newFileSentinelAccessToken := getRandomAccessToken()
+	err = setObjectToDatastore(fileSentinelStruct, newFileSentinelAccessToken)
+	if err != nil {
+		return errors.New("Error when setting file sentinel to datastore.")
+	}
+
+	// UPDATE TRACKING INFO
+	// delete the old file sentinel
+	err = deleteObjectFromDatastore(fileHeaderStruct.SentinelAccess)
+
+	// point the file header to the new file sentinel
+	fileHeaderStruct.SentinelAccess = newFileSentinelAccessToken
+
+	// save the updated file header
+	err = setObjectToDatastore(fileHeaderStruct, fileMetadataStruct.Header)
+	if err != nil {
+		return errors.New("Error when setting file header to datastore.")
+	}
+
+	// remove the recipient from the shared headers
+	delete(fileMetadataStruct.SharedHeaders, recipientUsername)
+
+	// update all the shared headers to point to the new sentinel
+	for _, sharedHeaderAccessToken := range fileMetadataStruct.SharedHeaders {
+		// get the shared header
+		sharedHeader, err := getObjectFromDatastore(sharedHeaderAccessToken)
+		if err != nil {
+			return errors.New("Error when getting shared header from datastore.")
+		}
+		var sharedHeaderStruct FileHeader
+		err = json.Unmarshal(sharedHeader, &sharedHeaderStruct)
+		if err != nil {
+			return errors.New("Error when converting shared header bytes to shared header struct.")
+		}
+		// point the shared header to the new file sentinel
+		sharedHeaderStruct.SentinelAccess = newFileSentinelAccessToken
+		// save the updated shared header
+		err = setObjectToDatastore(sharedHeaderStruct, sharedHeaderAccessToken)
+		if err != nil {
+			return errors.New("Error when setting shared header to datastore.")
+		}
+	}
+
+	// save the updated file metadata
+	err = setObjectToDatastore(fileMetadataStruct, fileMetadataAccessToken)
+	if err != nil {
+		return errors.New("Error when setting file metadata to datastore.")
+	}
 
 	return nil
 }
